@@ -34,32 +34,30 @@ To solve this cleanly using native ERPNext building blocks:
   - Blog posts: `route = "en/blog/<blog-slug>"` (preserving the original primary-language slug under `/en/...` for 1-to-1 counterpart switching and Odoo URL compatibility)
 - All `/en/...` pages use `content_type = "Page Builder"` and reference the exact same reusable `Web Template` building blocks as the primary-language pages, with English `web_template_values` and `/en/...` internal CTA/card URLs.
 
-### Layer 2: `Multilingual Navbar` (`Web Template`, `type = "Navbar"`)
-- Assigned via `Website Settings.navbar_template = "Multilingual Navbar"` and configured via `Website Settings.navbar_template_values`.
+### Layer 2: N-Language `Multilingual Navbar` (`Web Template`, `type = "Navbar"`)
+- Assigned via `Website Settings.navbar_template = "Multilingual Navbar"` and configured in a single place via `Website Settings.navbar_template_values`:
+  ```json
+  {
+    "primary_lang": "pl",
+    "supported_languages": "pl:Polski,en:English"
+  }
+  ```
+  To add a 3rd or 4th language later (e.g. German `de`), simply append `,de:Deutsch` to `supported_languages` in `Website Settings` without modifying any template code.
 - **Sandboxed Jinja Compatibility (`render_safe_globals`)**:
   - Uses `json.loads()` (never `frappe.parse_json()`, which is blocked for `Guest` users in Frappe v16's `render_safe_globals()`).
-  - Detects current language directly from `frappe.request.path` / `path`:
-    ```jinja
-    {%- set req_path = (frappe.request.path if frappe.request and frappe.request.path else ("/" + (path or ""))) -%}
-    {%- set clean_path = req_path.rstrip("/") or "/" -%}
-    {%- set is_en = (clean_path == "/en" or clean_path.startswith("/en/")) or (path == "en" or (path or "").startswith("en/")) -%}
-    ```
-  - Computes exact counterpart URLs (`pl_url` and `en_url`) for the **top language switcher (`PL | EN`)**:
-    - `/` or `/home` ↔ `/en`
-    - `/<slug>` ↔ `/en/<slug>`
-    - `/blog/<blog-slug>` ↔ `/en/blog/<blog-slug>`
-    - `/shop` ↔ `/en/shop`
-  - Renders as a sticky top header (`<nav class="navbar navbar-light navbar-expand-lg sticky-top">` paired with `position: sticky !important; top: 0 !important; z-index: 1030 !important;` in `Website Theme.custom_scss`) so navigation and the `PL | EN` language switcher remain accessible at all scroll positions.
-  - Dynamically translates `top_bar_items` labels (including nested dropdown `child_items`), rewrites internal links to `/en/...`, updates the brand logo `href` (`/` vs `/en`), and localizes the navbar CTA button (`Skontaktuj się z nami` → `Contact Us`).
-  - Synchronizes Frappe's `preferred_language` cookie (`document.cookie = "preferred_language=en; path=/; max-age=31536000; SameSite=Lax"`) both when clicking `PL | EN` and automatically on page load based on the URL prefix.
+  - Dynamically parses `supported_languages`, detects `curr_lang` (`pl`, `en`, `de`, ...) from the URL path prefix (`/<lang>` or `/<lang>/...`), and extracts the canonical `base_path` (`/` or `/<slug>`).
+  - Loops over `supported_languages` to render a **top language switcher dropdown (`🌐 PL ▾` / `🌐 EN ▾` — `.ihc-lang-dropdown`)**, displaying each configured language (`Polski (PL) ✓`, `English (EN)`, ...) and linking to `<base_path>` (for `primary_lang`) or `/<lang><base_path>` (for secondary languages).
+  - Renders as a sticky top header (`<nav class="navbar navbar-light navbar-expand-lg sticky-top">` paired with `position: sticky !important; top: 0 !important; z-index: 1030 !important;` in `Website Theme.custom_scss`).
+  - Translates all `top_bar_items` labels (including nested dropdown `child_items`), the CTA button (`_(call_to_action, curr_lang)`), and Cart UI labels (`_('Koszyk', curr_lang)`) using `Translation` DocType rows for `curr_lang`.
+  - Synchronizes Frappe's `preferred_language` cookie (`document.cookie = "preferred_language=" + lang + "; path=/; max-age=31536000; SameSite=Lax"`) both when selecting a language in the dropdown and automatically on page load.
 
-### Layer 3: Bilingual `Headline Footer` & Section `Web Template`s
+### Layer 3: N-Language `Headline Footer` & Section `Web Template`s
 - **`Headline Footer` (`type = "Footer"`)**:
-  - Reads `headline_title_en` and `headline_lead_en` from `Website Settings.footer_template_values` when `is_en` is True.
-  - Translates `footer_items` (`Home` → `/en`, `Contact us` → `/en/contactus`, `Privacy Policy` → `/en/cookie-policy`).
-  - Renders a secondary `Polski | English` language switcher in the bottom copyright bar.
-- **`Contact and Inquiry Form` & `Dynamic Blog Posts Grid` (`type = "Section"`)**:
-  - Automatically detect `is_en` from `frappe.request.path` (or explicit `lang` field) to render English form field labels, sidebar labels, `/en/contactus-thank-you` redirect, and `Read more →` blog links.
+  - Reads `primary_lang` and `supported_languages` directly from `Website Settings.navbar_template_values`.
+  - Translates `headline_title`, `headline_lead`, `footer_items`, and `copyright` via `_(..., curr_lang)` using `Translation` records.
+  - Dynamically loops over `supported_languages` to render a compact `<select class="ihc-footer-lang-select">` language dropdown (`🌐 Polski (PL)`, `🌐 English (EN)`, ...) in the bottom copyright bar.
+- **`Contact and Inquiry Form`, `Dynamic Blog Posts Grid`, `Store Product Catalog`, `Store Product Detail`, & `Store Shopping Cart and Checkout` (`type = "Section"`)**:
+  - All custom Section `Web Template`s detect `curr_lang` dynamically from `Website Settings.navbar_template_values` and translate all UI strings, form labels, buttons, and product descriptions via `_(..., curr_lang)`—with zero hardcoded `is_en` checks.
 
 ### Layer 4: `Translation` DocType & Multilingual Store Readiness
 - Seeds `Translation` DocType records (`language = "en"` and `language = "pl"`) for navigation labels, system strings (`Learn more`, `Login`, `My Account`, `Log out`), and E-Commerce / Store vocabulary (`Add to Cart`, `View in Cart`, `Go to Quote`, `Out of Stock`, `Price`, `Categories`, `All Products`, plus product/item names and descriptions).

@@ -17,16 +17,20 @@ Use this skill when migrating a website from an Odoo instance (PostgreSQL + Odoo
    - Extract the Odoo website's 5-color palette (`o-color-1`..`o-color-5`), color combinations (`o_cc1`..`o_cc5`), heading and body fonts, and button border-radius from `ir_attachment` (`_assets_primary_variables.scss`) and map them to ERPNext `Color` records and `Website Theme` (`primary_color`, `dark_color`, `light_color`, `text_color`, `background_color`, `google_font`, `custom_overrides`, `custom_scss`).
    - Provide CSS utility classes (`o-cc1`..`o-cc5`) in `Website Theme.custom_scss` and apply them via `Web Page Block.css_class` so section background/foreground combinations match Odoo's color presets.
    - Override Frappe's base `.navbar` (making it sticky via `position: sticky !important; top: 0 !important; z-index: 1030 !important; backdrop-filter: blur(8px)`), `.section-cta` (`background-color: #ededed; padding: 5rem 3rem`), `.web-footer` (`min-height: 140px` inside `body { height: 100%; display: flex; flex-direction: column }`), `.section-padding` (`8rem` desktop padding), `.section-with-features .section-features` (inline `style="margin-top: -1.5rem"` when `subtitle` is empty), and `.split-section-with-image` mobile column ordering in `Website Theme.custom_scss` so the sticky header, CTA cards, footers, feature grids, section spacing, and alternating split-section images behave cleanly across desktop and mobile.
-3. **Complete Media & Shape Migration**:
+3. **Complete Media & Shape Migration (CMS-Compatible Flat `/files/` Structure)**:
    - Download all referenced `/web/image/...` and `/web/content/...` attachments from Odoo.
    - For Odoo's dynamic SVG shapes (`/web_editor/shape/<theme>/<shape>.svg?c1=o-color-1...`), substitute `o-color-1`..`o-color-5` in the query string with URL-encoded hex colors (`%23...`) when fetching from Odoo's HTTP server so Odoo's `/web_editor/shape` controller bakes the exact website palette into the downloaded SVG.
-   - Save all assets into the ERPNext site's `/public/files/<site-slug>/` directory and register `File` documents in Frappe.
+   - **Never save extensionless files or nested subfolder paths in `file_url`**:
+     - Odoo built-in attachments like `website.s_key_images_default_image_3` lack file extensions in `ir_attachment.name` and contain dots in the module prefix. Always normalize filenames by replacing dots in module prefixes with underscores and appending the proper extension from `mimetype` (e.g., `website_s_key_images_default_image_3.jpg`).
+     - Frappe's `Section with Cards` (`templates/includes/image_with_blur.html` $\rightarrow$ `get_thumbnail_base64_for_image` $\rightarrow$ `get_local_image`) parses `file_url.rsplit(".", 1)` and passes `extn` directly to `PIL.Image.save(buffered, extn)`. An extensionless `file_url` or an `RGBA` PNG saved with a `.jpg` extension will crash page rendering. Always convert any `RGBA`/`P` mode image with a `.jpg`/`.jpeg` extension to `RGB` JPEG.
+     - Save all public assets **flat** into `/home/frappe/frappe-bench/sites/<site>/public/files/<filename_with_ext>` (`file_url = "/files/<filename_with_ext>"`) and register each in `tabFile` under `folder = "Home"` (`is_private = 0`). Frappe's `File` DocType (`file.py`) and CMS File Picker (`Attach Image` $\rightarrow$ `Library`) expect public files to reside flat in `/files/<filename_with_ext>`.
 4. **Navigation, Footer Template, Blogs, and Forms**:
    - Map `website_menu` hierarchy to `Website Settings.top_bar_items` (supporting parent/child dropdowns via `parent_label`).
    - Map the Odoo footer template (e.g. `website.template_footer_headline`) to a custom `Web Template` with `type = "Footer"` linked via `Website Settings.footer_template` and `Website Settings.footer_template_values`, keeping only the original footer links in `Website Settings.footer_items` and contact details in `Website Settings.address`.
      > **Important Jinja Sandbox Rule**: In Frappe `Web Template`s rendered for `Guest` users, `frappe.parse_json` is blocked by `render_safe_globals()`. Always use `json.loads(...)` when parsing JSON inside a `Web Template`.
    - Migrate `blog_blog` and `blog_post` records to ERPNext (`Blog Category` + `Blog Post` when the `blog` app/DocTypes are installed, plus `Help Category` + `Help Article` and structured `Web Page` articles under `/<blog-slug>/<post-slug>` in Frappe v16+).
    - Migrate `s_website_form` sections to ERPNext `Contact Us Settings`, `Web Form` documents (`Lead` / `Communication`), and interactive form sections.
+     - To deliver Contact Us form contents directly to an inbox with preserved multiline formatting, configure a default outgoing `Email Account` (`enable_outgoing = 1`, `default_outgoing = 1`, `always_use_account_email_id_as_sender = 1`), clear `Contact Us Settings.forward_to_email` (so `frappe.www.contact.send_message` does not send an unformatted duplicate), set `doc.recipients` on incoming website `Communication` records (`doc.sent_or_received == "Received" and not doc.reference_doctype`), and create native Frappe `Notification`s (`event = "New"`) on `Communication` and `Lead` wrapping `{{ doc.content }}` in `<div style="white-space: pre-wrap;">`.
 
 ---
 
@@ -53,7 +57,7 @@ Use this skill when migrating a website from an Odoo instance (PostgreSQL + Odoo
    - `/web/content/...`
    - `/web_editor/shape/...`
 2. Replace `o-color-1`..`o-color-5` in `/web_editor/shape/...` URLs with URL-encoded hex values from the extracted theme palette before downloading from `http://<odoo_host>:8069`.
-3. Copy downloaded files into ERPNext `/home/frappe/frappe-bench/sites/<site>/public/files/<folder>/` and create `File` DocType records.
+3. Copy downloaded files flat into ERPNext `/home/frappe/frappe-bench/sites/<site>/public/files/<filename_with_ext>` (ensuring valid file extensions and converting any RGBA-in-JPEG files to RGB JPEG) and create `File` DocType records under `folder = "Home"` with `file_url = "/files/<filename_with_ext>"`.
 
 ### Phase 3: Theme & Branding Setup in ERPNext
 1. Create `Color` records in ERPNext for each palette color (`o-color-1`..`o-color-5`).
