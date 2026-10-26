@@ -169,6 +169,18 @@ def build_client_script(survey: dict, lang: str) -> str:
 const IHC_SURVEY_CFG = {cfg_json};
 
 frappe.ready(function() {{
+    const urlSearch = window.location.search || '';
+    const params = new URLSearchParams(urlSearch);
+    const courseParam = (
+        params.get('course') ||
+        params.get('course_id') ||
+        params.get('id') ||
+        params.get('event') ||
+        params.get('cohort') ||
+        params.get('group') ||
+        ''
+    ).trim();
+
     // 1. Inject Multilingual Language Dropdown Switcher & English Navbar Translations on Web Form pages
     const $rightNav = $('.navbar .navbar-collapse ul.ml-auto');
     if ($rightNav.length && !$('#ihc-lang-dropdown-btn').length) {{
@@ -183,12 +195,12 @@ frappe.ready(function() {{
                 </a>
                 <ul class="dropdown-menu dropdown-menu-right ihc-lang-menu" aria-labelledby="ihc-lang-dropdown-btn">
                     <li class="dropdown-item ${{plActive}}">
-                        <a class="d-flex align-items-center justify-content-between" href="${{IHC_SURVEY_CFG.pl_url}}" onclick="document.cookie='preferred_language=pl; path=/; max-age=31536000';">
+                        <a class="d-flex align-items-center justify-content-between" href="${{IHC_SURVEY_CFG.pl_url}}${{urlSearch}}" onclick="document.cookie='preferred_language=pl; path=/; max-age=31536000';">
                             <span>Polski <small class="text-muted">(PL)</small></span>${{IHC_SURVEY_CFG.lang === 'pl' ? '<span class="ml-2">✓</span>' : ''}}
                         </a>
                     </li>
                     <li class="dropdown-item ${{enActive}}">
-                        <a class="d-flex align-items-center justify-content-between" href="${{IHC_SURVEY_CFG.en_url}}" onclick="document.cookie='preferred_language=en; path=/; max-age=31536000';">
+                        <a class="d-flex align-items-center justify-content-between" href="${{IHC_SURVEY_CFG.en_url}}${{urlSearch}}" onclick="document.cookie='preferred_language=en; path=/; max-age=31536000';">
                             <span>English <small class="text-muted">(EN)</small></span>${{IHC_SURVEY_CFG.lang === 'en' ? '<span class="ml-2">✓</span>' : ''}}
                         </a>
                     </li>
@@ -229,8 +241,20 @@ frappe.ready(function() {{
         $('.navbar a.navbar-brand').attr('href', '/en');
     }}
 
-    // 2. Enhance Select questions with interactive pill buttons
+    // 2. Capture course_id from URL parameter (?course=..., ?course_id=..., ?id=..., ?event=..., ?cohort=...)
     setTimeout(function() {{
+        const effectiveCourse = courseParam || 'general';
+        if (frappe.web_form && frappe.web_form.set_value) {{
+            frappe.web_form.set_value('course_id', effectiveCourse);
+        }}
+        $('[data-fieldname="course_id"]').hide();
+        if (courseParam && !$('#ihc-course-badge').length) {{
+            const badgeLabel = IHC_SURVEY_CFG.lang === 'pl' ? 'Szkolenie / Kurs' : 'Course / Event';
+            const $badge = $(`<div id="ihc-course-badge" class="mb-3"><span class="badge badge-pill px-3 py-2" style="background:#e3eff6; color:#314559; font-size:0.88rem; font-weight:600;">${{badgeLabel}}: ${{frappe.utils.escape_html(courseParam)}}</span></div>`);
+            $('.web-form-header, .web-form-introduction, .web-form-body').first().prepend($badge);
+        }}
+
+        // 3. Enhance Select questions with interactive pill buttons
         IHC_SURVEY_CFG.questions.forEach(function(q) {{
             if (q.type !== 'simple_choice' && q.type !== 'scale') return;
             const $ctrl = $('[data-fieldname="' + q.code + '"]');
@@ -434,6 +458,7 @@ def ensure_custom_doctypes():
     if not frappe.db.exists("DocType", "Survey Response"):
         fields = [
             {"fieldname": "survey", "label": "Survey", "fieldtype": "Link", "options": "Survey", "reqd": 1, "in_list_view": 1, "in_standard_filter": 1},
+            {"fieldname": "course_id", "label": "Course / Event ID", "fieldtype": "Data", "default": "general", "in_list_view": 1, "in_standard_filter": 1, "search_index": 1},
             {"fieldname": "state", "label": "Status", "fieldtype": "Select", "options": "done\nin_progress", "default": "done", "in_list_view": 1, "in_standard_filter": 1},
             {"fieldname": "language", "label": "Language", "fieldtype": "Select", "options": "pl\nen", "default": "pl", "in_list_view": 1, "in_standard_filter": 1},
             {"fieldname": "submitted_at", "label": "Submitted At", "fieldtype": "Datetime", "in_list_view": 1},
@@ -466,7 +491,7 @@ def ensure_custom_doctypes():
             "autoname": "format:SR-{#####}",
             "naming_rule": "Expression",
             "title_field": "survey",
-            "search_fields": "survey,achieved_grade,respondent_email,state",
+            "search_fields": "survey,course_id,achieved_grade,respondent_email,state",
             "fields": fields,
             "permissions": [
                 {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "export": 1, "report": 1},
@@ -476,8 +501,29 @@ def ensure_custom_doctypes():
         doc.insert(ignore_permissions=True)
     else:
         doc = frappe.get_doc("DocType", "Survey Response")
+        changed = False
+        if not any(f.fieldname == "course_id" for f in doc.fields):
+            doc.insert_field if hasattr(doc, "insert_field") else None
+            new_fields = []
+            for f in doc.fields:
+                new_fields.append(f.as_dict())
+                if f.fieldname == "survey":
+                    new_fields.append({
+                        "fieldname": "course_id",
+                        "label": "Course / Event ID",
+                        "fieldtype": "Data",
+                        "default": "general",
+                        "in_list_view": 1,
+                        "in_standard_filter": 1,
+                        "search_index": 1,
+                    })
+            doc.set("fields", new_fields)
+            doc.search_fields = "survey,course_id,achieved_grade,respondent_email,state"
+            changed = True
         if any(p.role == "Guest" for p in doc.permissions):
             doc.permissions = [p for p in doc.permissions if p.role != "Guest"]
+            changed = True
+        if changed:
             doc.save(ignore_permissions=True)
 
     frappe.db.commit()
@@ -504,15 +550,21 @@ if not doc.submitted_at:
 if not doc.state:
     doc.state = "done"
 
+if not doc.course_id:
+    doc.course_id = "general"
+
 if doc.survey and not doc.answers:
     survey_doc = frappe.get_doc("Survey", doc.survey)
     lang = doc.language or "pl"
     total_score = 0.0
+    max_possible = 0.0
     for q in survey_doc.questions:
+        score_map = json.loads(q.score_map_json or "{}")
+        if score_map:
+            max_possible = max_possible + max([float(v) for v in score_map.values()])
         val = (doc.get(q.question_code) or "").strip()
         if not val:
             continue
-        score_map = json.loads(q.score_map_json or "{}")
         sc = float(score_map.get(val, 0.0))
         total_score = total_score + sc
         doc.append("answers", {
@@ -523,17 +575,19 @@ if doc.survey and not doc.answers:
             "odoo_question_id": q.odoo_question_id,
         })
 
-    if survey_doc.scoring_type == "grading_with_answers" and doc.answers:
+    if doc.answers and max_possible > 0:
         doc.scoring_total = total_score
-        max_score = float(len(survey_doc.questions) * 5.0)
-        if max_score > 0:
-            doc.scoring_percentage = round((total_score / max_score) * 100.0, 2)
-        rounded_pct = round(doc.scoring_percentage or 0.0)
-        for g in survey_doc.grades:
-            if g.min_score_percentage <= rounded_pct <= g.max_score_percentage:
-                doc.achieved_grade = g.grade_name_pl if lang == "pl" else g.grade_name_en
-                doc.achieved_grade_description = g.description_pl if lang == "pl" else g.description_en
-                break
+        doc.scoring_percentage = round((total_score / max_possible) * 100.0, 2)
+        if survey_doc.scoring_type == "grading_with_answers":
+            rounded_pct = round(doc.scoring_percentage or 0.0)
+            for g in survey_doc.grades:
+                if g.min_score_percentage <= rounded_pct <= g.max_score_percentage:
+                    if g.grade_name_pl and g.grade_name_en and g.grade_name_pl != g.grade_name_en:
+                        doc.achieved_grade = f"{g.grade_name_pl} / {g.grade_name_en}"
+                    else:
+                        doc.achieved_grade = g.grade_name_pl or g.grade_name_en
+                    doc.achieved_grade_description = g.description_pl if lang == "pl" else g.description_en
+                    break
 """
     if frappe.db.exists("Server Script", script_name):
         ss = frappe.get_doc("Server Script", script_name)
@@ -560,6 +614,13 @@ def build_web_form_fields(survey: dict, lang: str) -> list[dict]:
             "default": survey["slug"],
             "hidden": 1,
             "reqd": 1,
+        },
+        {
+            "fieldname": "course_id",
+            "label": "Identyfikator kursu / szkolenia" if lang == "pl" else "Course / Event ID",
+            "fieldtype": "Data",
+            "default": "general",
+            "read_only": 1,
         },
         {
             "fieldname": "language",
@@ -780,6 +841,23 @@ def migrate_surveys_and_responses(data: dict):
         survey_doc.db_set("pl_web_form", wf_pl, update_modified=False)
         survey_doc.db_set("en_web_form", wf_en, update_modified=False)
 
+        # Precompute max possible score and bilingual grade lookup for this survey
+        max_possible = 0.0
+        for q in s.get("questions", []):
+            sm = q.get("score_map") or {}
+            if sm:
+                max_possible += max(float(v) for v in sm.values())
+
+        grade_bilingual_map = {}
+        for g in s.get("grades", []):
+            g_pl = g.get("grade_name_pl") or ""
+            g_en = g.get("grade_name_en") or ""
+            bilingual_label = f"{g_pl} / {g_en}" if (g_pl and g_en and g_pl != g_en) else (g_pl or g_en)
+            if g_pl:
+                grade_bilingual_map[g_pl] = bilingual_label
+            if g_en:
+                grade_bilingual_map[g_en] = bilingual_label
+
         # Migrate historical responses
         for r in s.get("responses", []):
             odoo_input_id = r["odoo_input_id"]
@@ -790,12 +868,17 @@ def migrate_surveys_and_responses(data: dict):
                 sr = frappe.new_doc("Survey Response")
 
             sr.survey = slug
+            sr.course_id = (
+                "endress-hauser"
+                if slug == "digital-hygiene-assessment-endress-hauser"
+                else (getattr(sr, "course_id", None) or "general")
+            )
             sr.state = r["state"]
             sr.language = "pl"
             sr.submitted_at = (r.get("submitted_at") or "").replace("T", " ")[:19] or None
-            sr.scoring_total = r.get("scoring_total") or 0.0
-            sr.scoring_percentage = r.get("scoring_percentage") or 0.0
-            sr.achieved_grade = r.get("achieved_grade") or ""
+
+            raw_grade = r.get("achieved_grade") or ""
+            sr.achieved_grade = grade_bilingual_map.get(raw_grade, raw_grade)
             sr.achieved_grade_description = r.get("achieved_grade_description") or ""
             sr.respondent_name = r.get("nickname") or ""
             sr.respondent_email = r.get("email") or ""
@@ -807,14 +890,27 @@ def migrate_surveys_and_responses(data: dict):
                 sr.set(q_code, val_pl)
 
             sr.set("answers", [])
+            computed_total = 0.0
             for ans in r.get("answers", []):
+                sc = float(ans.get("answer_score") or 0.0)
+                computed_total += sc
                 sr.append("answers", {
                     "question_code": ans["question_code"],
                     "question_text": ans["question_pl"],
                     "answer_value": ans["answer_value_pl"],
-                    "answer_score": ans["answer_score"],
+                    "answer_score": sc,
                     "odoo_question_id": ans["odoo_question_id"],
                 })
+
+            if r.get("scoring_total") is not None and float(r.get("scoring_total") or 0.0) > 0:
+                sr.scoring_total = float(r.get("scoring_total") or 0.0)
+                sr.scoring_percentage = float(r.get("scoring_percentage") or 0.0)
+            elif max_possible > 0 and computed_total > 0:
+                sr.scoring_total = computed_total
+                sr.scoring_percentage = round((computed_total / max_possible) * 100.0, 2)
+            else:
+                sr.scoring_total = 0.0
+                sr.scoring_percentage = 0.0
 
             sr.save(ignore_permissions=True)
 
@@ -934,25 +1030,35 @@ def ensure_survey_catalog_pages_and_redirects(data: dict):
         ])
         wp.save(ignore_permissions=True)
 
-    # Add legacy Odoo survey token redirects + /ankiety redirects in Website Settings
+    # Add legacy Odoo survey token redirects + /ankiety redirects + query-forwarding /new redirects in Website Settings
     ws = frappe.get_single("Website Settings")
     existing_sources = {r.source.strip("/"): r for r in ws.route_redirects}
     redirects_to_add = [
         ("ankiety", "/surveys"),
         ("en/ankiety", "/en/surveys"),
-        ("survey/5f1edd02-4201-4045-86aa-440e03582261", "/surveys/digital-hygiene-assessment"),
+        ("survey/5f1edd02-4201-4045-86aa-440e03582261", "/surveys/digital-hygiene-assessment/new"),
+        ("surveys/([^/]+)", r"/surveys/\1/new"),
+        ("en/surveys/([^/]+)", r"/en/surveys/\1/new"),
+        ("surveys/([^/]+)/course/([^/]+)", r"/surveys/\1/new?course=\2"),
+        ("en/surveys/([^/]+)/course/([^/]+)", r"/en/surveys/\1/new?course=\2"),
     ]
     for s in data.get("surveys", []):
         tok = s.get("access_token")
         slug = s.get("slug")
         if tok and slug:
-            redirects_to_add.append((f"survey/start/{tok}", f"/surveys/{slug}"))
+            redirects_to_add.append((f"survey/start/{tok}", f"/surveys/{slug}/new"))
 
     for src, target in redirects_to_add:
         if src in existing_sources:
             existing_sources[src].target = target
+            existing_sources[src].forward_query_parameters = 1
         else:
-            ws.append("route_redirects", {"source": src, "target": target, "redirect_http_status": "301"})
+            ws.append("route_redirects", {
+                "source": src,
+                "target": target,
+                "redirect_http_status": "301",
+                "forward_query_parameters": 1,
+            })
 
     # Add "Ankiety" -> "/surveys" under "Wiedza" in top_bar_items if not present
     has_surveys_nav = any((item.url or "").strip() == "/surveys" for item in ws.top_bar_items)
@@ -977,27 +1083,74 @@ def ensure_survey_catalog_pages_and_redirects(data: dict):
 
 
 def ensure_survey_analytics_dashboard_and_workspace():
-    # 1. Native Query Reports for Question & Answer aggregation
+    # 1. Native Script Reports with Survey & Course / Event ID (course_id) filters and built-in charts
     r1_name = "Survey Question Breakdown"
     r1 = frappe.get_doc("Report", r1_name) if frappe.db.exists("Report", r1_name) else frappe.new_doc("Report")
     r1.report_name = r1_name
     r1.ref_doctype = "Survey Response"
     r1.is_standard = "No"
     r1.module = "Website"
-    r1.report_type = "Query Report"
+    r1.report_type = "Script Report"
     r1.disabled = 0
-    r1.query = """SELECT
-    sr.survey AS "Survey:Link/Survey:200",
-    sra.question_code AS "Code:Data:70",
-    CONCAT(sra.question_code, " - ", LEFT(sra.question_text, 45)) AS "Question Label:Data:260",
-    sra.question_text AS "Full Question:Data:380",
-    COUNT(sra.name) AS "Responses:Int:100",
-    ROUND(AVG(sra.answer_score), 2) AS "Avg Score (pts):Float:130",
-    ROUND(SUM(sra.answer_score), 1) AS "Total Points:Float:120"
-FROM `tabSurvey Response Answer` sra
-INNER JOIN `tabSurvey Response` sr ON sr.name = sra.parent
-GROUP BY sr.survey, sra.question_code, sra.question_text
-ORDER BY sr.survey ASC, sra.question_code ASC"""
+    r1.query = ""
+    r1.set("filters", [
+        {"fieldname": "survey", "label": "Survey", "fieldtype": "Link", "options": "Survey", "mandatory": 0},
+        {"fieldname": "course_id", "label": "Course / Event ID", "fieldtype": "Data", "mandatory": 0},
+    ])
+    r1.report_script = """
+conditions = ["sqi.question_type != 'text_box'"]
+values = {}
+if filters and filters.get("survey"):
+    conditions.append("sr.survey = %(survey)s")
+    values["survey"] = filters.get("survey")
+if filters and filters.get("course_id"):
+    conditions.append("sr.course_id = %(course_id)s")
+    values["course_id"] = filters.get("course_id")
+
+where_clause = "WHERE " + " AND ".join(conditions)
+
+rows = frappe.db.sql(f'''
+    SELECT
+        sr.survey AS survey,
+        sra.question_code AS question_code,
+        CONCAT(sra.question_code, " - ", LEFT(COALESCE(sqi.question_pl, sra.question_text), 42)) AS question_label,
+        COALESCE(sqi.question_pl, sra.question_text) AS full_question_pl,
+        COALESCE(sqi.question_en, sra.question_text) AS full_question_en,
+        COUNT(sra.name) AS responses,
+        ROUND(AVG(sra.answer_score), 2) AS avg_score,
+        ROUND(SUM(sra.answer_score), 1) AS total_points
+    FROM `tabSurvey Response Answer` sra
+    INNER JOIN `tabSurvey Response` sr ON sr.name = sra.parent
+    LEFT JOIN `tabSurvey Question Item` sqi ON sqi.parent = sr.survey AND sqi.question_code = sra.question_code
+    {where_clause}
+    GROUP BY sr.survey, sra.question_code
+    ORDER BY sr.survey ASC, sra.question_code ASC
+''', values, as_dict=True)
+
+columns = [
+    {"fieldname": "survey", "label": "Survey", "fieldtype": "Link", "options": "Survey", "width": 190},
+    {"fieldname": "question_code", "label": "Code", "fieldtype": "Data", "width": 70},
+    {"fieldname": "question_label", "label": "Question Label", "fieldtype": "Data", "width": 250},
+    {"fieldname": "full_question_pl", "label": "Question (PL)", "fieldtype": "Data", "width": 320},
+    {"fieldname": "full_question_en", "label": "Question (EN)", "fieldtype": "Data", "width": 320},
+    {"fieldname": "responses", "label": "Responses", "fieldtype": "Int", "width": 95},
+    {"fieldname": "avg_score", "label": "Avg Score (pts)", "fieldtype": "Float", "width": 130},
+    {"fieldname": "total_points", "label": "Total Points", "fieldtype": "Float", "width": 110},
+]
+
+chart = {
+    "data": {
+        "labels": [r["question_label"] for r in rows],
+        "datasets": [
+            {"name": "Avg Score (pts)", "values": [r["avg_score"] for r in rows]}
+        ]
+    },
+    "type": "bar",
+    "colors": ["#21409a"]
+}
+
+data = columns, rows, None, chart, None
+""".strip()
     r1.roles = []
     for role in ["System Manager", "Website Manager"]:
         r1.append("roles", {"role": role})
@@ -1009,26 +1162,213 @@ ORDER BY sr.survey ASC, sra.question_code ASC"""
     r2.ref_doctype = "Survey Response"
     r2.is_standard = "No"
     r2.module = "Website"
-    r2.report_type = "Query Report"
+    r2.report_type = "Script Report"
     r2.disabled = 0
-    r2.query = """SELECT
-    sr.survey AS "Survey:Link/Survey:200",
-    sra.question_code AS "Code:Data:70",
-    sra.question_text AS "Question:Data:340",
-    sra.answer_value AS "Answer / Option:Data:240",
-    COUNT(sra.name) AS "Count:Int:90",
-    ROUND(AVG(sra.answer_score), 2) AS "Points:Float:90"
-FROM `tabSurvey Response Answer` sra
-INNER JOIN `tabSurvey Response` sr ON sr.name = sra.parent
-GROUP BY sr.survey, sra.question_code, sra.question_text, sra.answer_value
-ORDER BY sr.survey ASC, sra.question_code ASC, COUNT(sra.name) DESC"""
+    r2.query = ""
+    r2.set("filters", [
+        {"fieldname": "survey", "label": "Survey", "fieldtype": "Link", "options": "Survey", "mandatory": 0},
+        {"fieldname": "course_id", "label": "Course / Event ID", "fieldtype": "Data", "mandatory": 0},
+        {"fieldname": "question_code", "label": "Question Code (e.g. q_01)", "fieldtype": "Data", "mandatory": 0},
+    ])
+    r2.report_script = """
+conditions = ["sqi.question_type != 'text_box'"]
+values = {}
+if filters and filters.get("survey"):
+    conditions.append("sr.survey = %(survey)s")
+    values["survey"] = filters.get("survey")
+if filters and filters.get("course_id"):
+    conditions.append("sr.course_id = %(course_id)s")
+    values["course_id"] = filters.get("course_id")
+if filters and filters.get("question_code"):
+    conditions.append("sra.question_code = %(question_code)s")
+    values["question_code"] = filters.get("question_code")
+
+where_clause = "WHERE " + " AND ".join(conditions)
+
+rows = frappe.db.sql(f'''
+    SELECT
+        sr.survey AS survey,
+        sra.question_code AS question_code,
+        COALESCE(sqi.question_pl, sra.question_text) AS question_pl,
+        sra.answer_value AS answer_value,
+        CONCAT(sra.question_code, ": ", LEFT(sra.answer_value, 28)) AS option_label,
+        COUNT(sra.name) AS count,
+        ROUND(AVG(sra.answer_score), 2) AS points
+    FROM `tabSurvey Response Answer` sra
+    INNER JOIN `tabSurvey Response` sr ON sr.name = sra.parent
+    LEFT JOIN `tabSurvey Question Item` sqi ON sqi.parent = sr.survey AND sqi.question_code = sra.question_code
+    {where_clause}
+    GROUP BY sr.survey, sra.question_code, sra.answer_value
+    ORDER BY sr.survey ASC, sra.question_code ASC, COUNT(sra.name) DESC
+''', values, as_dict=True)
+
+columns = [
+    {"fieldname": "survey", "label": "Survey", "fieldtype": "Link", "options": "Survey", "width": 190},
+    {"fieldname": "question_code", "label": "Code", "fieldtype": "Data", "width": 70},
+    {"fieldname": "question_pl", "label": "Question (PL)", "fieldtype": "Data", "width": 320},
+    {"fieldname": "answer_value", "label": "Answer / Option", "fieldtype": "Data", "width": 240},
+    {"fieldname": "count", "label": "Count", "fieldtype": "Int", "width": 95},
+    {"fieldname": "points", "label": "Points", "fieldtype": "Float", "width": 90},
+]
+
+chart = {
+    "data": {
+        "labels": [r["option_label"] for r in rows[:30]],
+        "datasets": [
+            {"name": "Responses", "values": [r["count"] for r in rows[:30]]}
+        ]
+    },
+    "type": "bar",
+    "colors": ["#3b82f6"]
+}
+
+data = columns, rows, None, chart, None
+""".strip()
     r2.roles = []
     for role in ["System Manager", "Website Manager"]:
         r2.append("roles", {"role": role})
     r2.save(ignore_permissions=True)
 
-    # 2. Native Number Cards
-    cards_spec = [
+    r3_name = "Survey Open Text Answers"
+    r3 = frappe.get_doc("Report", r3_name) if frappe.db.exists("Report", r3_name) else frappe.new_doc("Report")
+    r3.report_name = r3_name
+    r3.ref_doctype = "Survey Response"
+    r3.is_standard = "No"
+    r3.module = "Website"
+    r3.report_type = "Script Report"
+    r3.disabled = 0
+    r3.query = ""
+    r3.set("filters", [
+        {"fieldname": "survey", "label": "Survey", "fieldtype": "Link", "options": "Survey", "mandatory": 0},
+        {"fieldname": "course_id", "label": "Course / Event ID", "fieldtype": "Data", "mandatory": 0},
+    ])
+    r3.report_script = """
+conditions = ["sqi.question_type = 'text_box'", "IFNULL(sra.answer_value, '') != ''"]
+values = {}
+if filters and filters.get("survey"):
+    conditions.append("sr.survey = %(survey)s")
+    values["survey"] = filters.get("survey")
+if filters and filters.get("course_id"):
+    conditions.append("sr.course_id = %(course_id)s")
+    values["course_id"] = filters.get("course_id")
+
+where_clause = "WHERE " + " AND ".join(conditions)
+
+rows = frappe.db.sql(f'''
+    SELECT
+        sr.name AS response_id,
+        sr.survey AS survey,
+        sr.course_id AS course_id,
+        sr.submitted_at AS submitted_at,
+        sra.question_code AS question_code,
+        COALESCE(sqi.question_pl, sra.question_text) AS question_text,
+        sra.answer_value AS answer_value
+    FROM `tabSurvey Response Answer` sra
+    INNER JOIN `tabSurvey Response` sr ON sr.name = sra.parent
+    INNER JOIN `tabSurvey Question Item` sqi ON sqi.parent = sr.survey AND sqi.question_code = sra.question_code
+    {where_clause}
+    ORDER BY sr.submitted_at DESC, sr.name DESC, sra.question_code ASC
+''', values, as_dict=True)
+
+columns = [
+    {"fieldname": "response_id", "label": "Response", "fieldtype": "Link", "options": "Survey Response", "width": 160},
+    {"fieldname": "survey", "label": "Survey", "fieldtype": "Link", "options": "Survey", "width": 190},
+    {"fieldname": "course_id", "label": "Course / Event ID", "fieldtype": "Data", "width": 140},
+    {"fieldname": "submitted_at", "label": "Submitted At", "fieldtype": "Datetime", "width": 155},
+    {"fieldname": "question_code", "label": "Code", "fieldtype": "Data", "width": 70},
+    {"fieldname": "question_text", "label": "Question", "fieldtype": "Data", "width": 300},
+    {"fieldname": "answer_value", "label": "Open-Ended Answer / Feedback", "fieldtype": "Data", "width": 440},
+]
+
+data = columns, rows, None, None, None
+""".strip()
+    r3.roles = []
+    for role in ["System Manager", "Website Manager"]:
+        r3.append("roles", {"role": role})
+    r3.save(ignore_permissions=True)
+
+    # Helper to upsert a Number Card (Number Card autoname sets name = label on insert)
+    def upsert_number_card(spec: dict):
+        nc = frappe.get_doc("Number Card", spec["name"]) if frappe.db.exists("Number Card", spec["name"]) else frappe.new_doc("Number Card")
+        nc.label = spec["name"]
+        nc.type = "Document Type"
+        nc.document_type = "Survey Response"
+        nc.function = spec["function"]
+        nc.aggregate_function_based_on = spec.get("aggregate_function_based_on")
+        nc.filters_json = spec["filters_json"]
+        nc.is_public = 1
+        nc.is_standard = 0
+        nc.module = "Website"
+        nc.color = spec["color"]
+        nc.show_percentage_stats = 1
+        nc.stats_time_interval = "Monthly"
+        nc.save(ignore_permissions=True)
+
+    # Helper to upsert a Dashboard Chart
+    def upsert_dashboard_chart(spec: dict):
+        dc = frappe.get_doc("Dashboard Chart", spec["name"]) if frappe.db.exists("Dashboard Chart", spec["name"]) else frappe.new_doc("Dashboard Chart")
+        dc.chart_name = spec["name"]
+        dc.chart_type = spec["chart_type"]
+        dc.document_type = spec.get("document_type")
+        dc.group_by_type = spec.get("group_by_type")
+        dc.group_by_based_on = spec.get("group_by_based_on")
+        dc.aggregate_function_based_on = spec.get("aggregate_function_based_on")
+        dc.based_on = spec.get("based_on")
+        dc.timeseries = spec.get("timeseries", 0)
+        dc.timespan = spec.get("timespan")
+        dc.time_interval = spec.get("time_interval")
+        dc.report_name = spec.get("report_name")
+        dc.use_report_chart = spec.get("use_report_chart", 0)
+        dc.x_field = spec.get("x_field")
+        dc.type = spec["type"]
+        dc.filters_json = spec["filters_json"]
+        dc.color = spec.get("color")
+        dc.is_public = 1
+        dc.is_standard = 0
+        dc.module = "Website"
+        dc.show_values_over_chart = 1
+        dc.y_axis = []
+        for y in spec.get("y_axis", []):
+            dc.append("y_axis", y)
+        dc.save(ignore_permissions=True)
+
+    # Helper to upsert a Dashboard
+    def upsert_dashboard(dash_name: str, card_names: list[str], chart_specs: list[dict]):
+        dash = frappe.get_doc("Dashboard", dash_name) if frappe.db.exists("Dashboard", dash_name) else frappe.new_doc("Dashboard")
+        dash.dashboard_name = dash_name
+        dash.module = "Website"
+        dash.is_standard = 0
+        dash.is_default = 0
+        dash.cards = []
+        for cname in card_names:
+            dash.append("cards", {"card": cname})
+        dash.charts = []
+        for cspec in chart_specs:
+            dash.append("charts", {"chart": cspec["name"], "width": cspec.get("width", "Half")})
+        dash.save(ignore_permissions=True)
+
+    at_risk_grades = [
+        "W grupie ryzyka / At Risk",
+        "Niezdrowy / Unhealthy",
+        "Zagrożenie uzależnieniem / Addiction Risk",
+        "W grupie ryzyka",
+        "At Risk",
+        "Niezdrowy",
+        "Unhealthy",
+        "Zagrożenie uzależnieniem",
+        "Addiction Risk",
+    ]
+    healthy_grades = [
+        "Zrównoważony / Balanced",
+        "Pod kontrolą / Controlled",
+        "Zrównoważony",
+        "Balanced",
+        "Pod kontrolą",
+        "Controlled",
+    ]
+
+    # 2. Cross-Survey Overview Dashboard ("Survey Analytics")
+    overview_cards = [
         {
             "name": "Total Survey Responses",
             "label": "Total Survey Responses",
@@ -1048,14 +1388,14 @@ ORDER BY sr.survey ASC, sra.question_code ASC, COUNT(sra.name) DESC"""
             "label": "Average Hygiene Score (%)",
             "function": "Average",
             "aggregate_function_based_on": "scoring_percentage",
-            "filters_json": json.dumps([["Survey Response", "scoring_percentage", ">", 0]]),
+            "filters_json": json.dumps([["Survey Response", "survey", "in", ["digital-hygiene-assessment", "digital-hygiene-assessment-endress-hauser"]]]),
             "color": "#10b981",
         },
         {
             "name": "Respondents At Risk",
             "label": "Respondents At Risk",
             "function": "Count",
-            "filters_json": json.dumps([["Survey Response", "achieved_grade", "in", ["W grupie ryzyka", "At Risk", "Niezdrowy", "Unhealthy", "Zagrożenie uzależnieniem", "Addiction Risk"]]]),
+            "filters_json": json.dumps([["Survey Response", "achieved_grade", "in", at_risk_grades]]),
             "color": "#ef4444",
         },
         {
@@ -1066,26 +1406,10 @@ ORDER BY sr.survey ASC, sra.question_code ASC, COUNT(sra.name) DESC"""
             "color": "#8b5cf6",
         },
     ]
+    for c in overview_cards:
+        upsert_number_card(c)
 
-    for spec in cards_spec:
-        nc = frappe.get_doc("Number Card", spec["name"]) if frappe.db.exists("Number Card", spec["name"]) else frappe.new_doc("Number Card")
-        nc.name = spec["name"]
-        nc.label = spec["label"]
-        nc.type = "Document Type"
-        nc.document_type = "Survey Response"
-        nc.function = spec["function"]
-        nc.aggregate_function_based_on = spec.get("aggregate_function_based_on")
-        nc.filters_json = spec["filters_json"]
-        nc.is_public = 1
-        nc.is_standard = 0
-        nc.module = "Website"
-        nc.color = spec["color"]
-        nc.show_percentage_stats = 1
-        nc.stats_time_interval = "Monthly"
-        nc.save(ignore_permissions=True)
-
-    # 3. Native Dashboard Charts
-    charts_spec = [
+    overview_charts = [
         {
             "name": "Survey Responses by Survey",
             "chart_type": "Group By",
@@ -1137,58 +1461,707 @@ ORDER BY sr.survey ASC, sra.question_code ASC, COUNT(sra.name) DESC"""
             "name": "Survey Question Average Scores",
             "chart_type": "Report",
             "report_name": "Survey Question Breakdown",
-            "use_report_chart": 0,
-            "x_field": "question_label",
-            "y_axis": [{"y_field": "avg_score_(pts)", "color": "#21409a"}],
+            "use_report_chart": 1,
             "type": "Bar",
-            "filters_json": "{}",
+            "filters_json": json.dumps({"survey": "digital-hygiene-assessment"}),
             "width": "Full",
         },
     ]
+    for ch in overview_charts:
+        upsert_dashboard_chart(ch)
+    upsert_dashboard("Survey Analytics", [c["name"] for c in overview_cards], overview_charts)
 
-    for spec in charts_spec:
-        dc = frappe.get_doc("Dashboard Chart", spec["name"]) if frappe.db.exists("Dashboard Chart", spec["name"]) else frappe.new_doc("Dashboard Chart")
-        dc.chart_name = spec["name"]
-        dc.chart_type = spec["chart_type"]
-        dc.document_type = spec.get("document_type")
-        dc.group_by_type = spec.get("group_by_type")
-        dc.group_by_based_on = spec.get("group_by_based_on")
-        dc.aggregate_function_based_on = spec.get("aggregate_function_based_on")
-        dc.based_on = spec.get("based_on")
-        dc.timeseries = spec.get("timeseries", 0)
-        dc.timespan = spec.get("timespan")
-        dc.time_interval = spec.get("time_interval")
-        dc.report_name = spec.get("report_name")
-        dc.use_report_chart = spec.get("use_report_chart", 0)
-        dc.x_field = spec.get("x_field")
-        dc.type = spec["type"]
-        dc.filters_json = spec["filters_json"]
-        dc.color = spec.get("color")
-        dc.is_public = 1
-        dc.is_standard = 0
-        dc.module = "Website"
-        dc.show_values_over_chart = 1
-        dc.y_axis = []
-        for y in spec.get("y_axis", []):
-            dc.append("y_axis", y)
-        dc.save(ignore_permissions=True)
+    # 3. Six Dedicated Per-Survey Dashboards (1 per Survey)
+    per_survey_dashboards = [
+        # 3.1 Digital Hygiene Assessment
+        {
+            "dashboard_name": "Survey: Digital Hygiene Assessment",
+            "slug": "digital-hygiene-assessment",
+            "cards": [
+                {
+                    "name": "DHA: Total Responses",
+                    "label": "Total Responses",
+                    "function": "Count",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "digital-hygiene-assessment"]]),
+                    "color": "#21409a",
+                },
+                {
+                    "name": "DHA: Average Score (%)",
+                    "label": "Average Hygiene Score (%)",
+                    "function": "Average",
+                    "aggregate_function_based_on": "scoring_percentage",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "digital-hygiene-assessment"]]),
+                    "color": "#10b981",
+                },
+                {
+                    "name": "DHA: Balanced / Controlled",
+                    "label": "Balanced / Controlled",
+                    "function": "Count",
+                    "filters_json": json.dumps([
+                        ["Survey Response", "survey", "=", "digital-hygiene-assessment"],
+                        ["Survey Response", "achieved_grade", "in", healthy_grades],
+                    ]),
+                    "color": "#3b82f6",
+                },
+                {
+                    "name": "DHA: At Risk / Unhealthy",
+                    "label": "At Risk / Unhealthy",
+                    "function": "Count",
+                    "filters_json": json.dumps([
+                        ["Survey Response", "survey", "=", "digital-hygiene-assessment"],
+                        ["Survey Response", "achieved_grade", "in", at_risk_grades],
+                    ]),
+                    "color": "#ef4444",
+                },
+            ],
+            "charts": [
+                {
+                    "name": "DHA: Grade Distribution",
+                    "chart_type": "Group By",
+                    "document_type": "Survey Response",
+                    "group_by_type": "Count",
+                    "group_by_based_on": "achieved_grade",
+                    "type": "Donut",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "digital-hygiene-assessment"]]),
+                    "color": "#10b981",
+                    "width": "Half",
+                },
+                {
+                    "name": "DHA: Responses by Course / Cohort",
+                    "chart_type": "Group By",
+                    "document_type": "Survey Response",
+                    "group_by_type": "Count",
+                    "group_by_based_on": "course_id",
+                    "type": "Bar",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "digital-hygiene-assessment"]]),
+                    "color": "#3b82f6",
+                    "width": "Half",
+                },
+                {
+                    "name": "DHA: Question Average Scores (Q1-Q20)",
+                    "chart_type": "Report",
+                    "report_name": "Survey Question Breakdown",
+                    "use_report_chart": 1,
+                    "type": "Bar",
+                    "filters_json": json.dumps({"survey": "digital-hygiene-assessment"}),
+                    "width": "Full",
+                },
+                {
+                    "name": "DHA: Submissions Over Time",
+                    "chart_type": "Count",
+                    "document_type": "Survey Response",
+                    "based_on": "submitted_at",
+                    "timeseries": 1,
+                    "timespan": "Last Year",
+                    "time_interval": "Monthly",
+                    "type": "Line",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "digital-hygiene-assessment"]]),
+                    "color": "#8b5cf6",
+                    "width": "Half",
+                },
+                {
+                    "name": "DHA: Avg Score (%) by Course / Cohort",
+                    "chart_type": "Group By",
+                    "document_type": "Survey Response",
+                    "group_by_type": "Average",
+                    "group_by_based_on": "course_id",
+                    "aggregate_function_based_on": "scoring_percentage",
+                    "type": "Bar",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "digital-hygiene-assessment"]]),
+                    "color": "#21409a",
+                    "width": "Half",
+                },
+            ],
+        },
+        # 3.2 Digital Hygiene (Endress+Hauser)
+        {
+            "dashboard_name": "Survey: Digital Hygiene (Endress+Hauser)",
+            "slug": "digital-hygiene-assessment-endress-hauser",
+            "cards": [
+                {
+                    "name": "E+H: Total Responses",
+                    "label": "Total Responses (E+H)",
+                    "function": "Count",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "digital-hygiene-assessment-endress-hauser"]]),
+                    "color": "#21409a",
+                },
+                {
+                    "name": "E+H: Average Score (%)",
+                    "label": "Average Hygiene Score (%)",
+                    "function": "Average",
+                    "aggregate_function_based_on": "scoring_percentage",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "digital-hygiene-assessment-endress-hauser"]]),
+                    "color": "#10b981",
+                },
+                {
+                    "name": "E+H: Balanced / Controlled",
+                    "label": "Balanced / Controlled",
+                    "function": "Count",
+                    "filters_json": json.dumps([
+                        ["Survey Response", "survey", "=", "digital-hygiene-assessment-endress-hauser"],
+                        ["Survey Response", "achieved_grade", "in", healthy_grades],
+                    ]),
+                    "color": "#3b82f6",
+                },
+                {
+                    "name": "E+H: At Risk / Unhealthy",
+                    "label": "At Risk / Unhealthy",
+                    "function": "Count",
+                    "filters_json": json.dumps([
+                        ["Survey Response", "survey", "=", "digital-hygiene-assessment-endress-hauser"],
+                        ["Survey Response", "achieved_grade", "in", at_risk_grades],
+                    ]),
+                    "color": "#ef4444",
+                },
+            ],
+            "charts": [
+                {
+                    "name": "E+H: Grade Distribution",
+                    "chart_type": "Group By",
+                    "document_type": "Survey Response",
+                    "group_by_type": "Count",
+                    "group_by_based_on": "achieved_grade",
+                    "type": "Donut",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "digital-hygiene-assessment-endress-hauser"]]),
+                    "color": "#10b981",
+                    "width": "Half",
+                },
+                {
+                    "name": "E+H: Responses by Course / Cohort",
+                    "chart_type": "Group By",
+                    "document_type": "Survey Response",
+                    "group_by_type": "Count",
+                    "group_by_based_on": "course_id",
+                    "type": "Bar",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "digital-hygiene-assessment-endress-hauser"]]),
+                    "color": "#3b82f6",
+                    "width": "Half",
+                },
+                {
+                    "name": "E+H: Question Average Scores (Q1-Q20)",
+                    "chart_type": "Report",
+                    "report_name": "Survey Question Breakdown",
+                    "use_report_chart": 1,
+                    "type": "Bar",
+                    "filters_json": json.dumps({"survey": "digital-hygiene-assessment-endress-hauser"}),
+                    "width": "Full",
+                },
+                {
+                    "name": "E+H: Submissions Over Time",
+                    "chart_type": "Count",
+                    "document_type": "Survey Response",
+                    "based_on": "submitted_at",
+                    "timeseries": 1,
+                    "timespan": "Last Year",
+                    "time_interval": "Monthly",
+                    "type": "Line",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "digital-hygiene-assessment-endress-hauser"]]),
+                    "color": "#8b5cf6",
+                    "width": "Full",
+                },
+            ],
+        },
+        # 3.3 Digital Risk Assessment (Archive)
+        {
+            "dashboard_name": "Survey: Digital Risk Assessment (Archive)",
+            "slug": "digital-risk-assessment-archive",
+            "cards": [
+                {
+                    "name": "DRA: Total Responses",
+                    "label": "Total Responses",
+                    "function": "Count",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "digital-risk-assessment-archive"]]),
+                    "color": "#21409a",
+                },
+                {
+                    "name": "DRA: Average Score (%)",
+                    "label": "Average Risk Score (%)",
+                    "function": "Average",
+                    "aggregate_function_based_on": "scoring_percentage",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "digital-risk-assessment-archive"]]),
+                    "color": "#f59e0b",
+                },
+                {
+                    "name": "DRA: Addiction Risk Count",
+                    "label": "Addiction Risk Respondents",
+                    "function": "Count",
+                    "filters_json": json.dumps([
+                        ["Survey Response", "survey", "=", "digital-risk-assessment-archive"],
+                        ["Survey Response", "achieved_grade", "in", at_risk_grades],
+                    ]),
+                    "color": "#ef4444",
+                },
+            ],
+            "charts": [
+                {
+                    "name": "DRA: Grade Distribution",
+                    "chart_type": "Group By",
+                    "document_type": "Survey Response",
+                    "group_by_type": "Count",
+                    "group_by_based_on": "achieved_grade",
+                    "type": "Donut",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "digital-risk-assessment-archive"]]),
+                    "color": "#ef4444",
+                    "width": "Half",
+                },
+                {
+                    "name": "DRA: Responses by Course / Cohort",
+                    "chart_type": "Group By",
+                    "document_type": "Survey Response",
+                    "group_by_type": "Count",
+                    "group_by_based_on": "course_id",
+                    "type": "Bar",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "digital-risk-assessment-archive"]]),
+                    "color": "#3b82f6",
+                    "width": "Half",
+                },
+                {
+                    "name": "DRA: Question Average Scores (Q1-Q12)",
+                    "chart_type": "Report",
+                    "report_name": "Survey Question Breakdown",
+                    "use_report_chart": 1,
+                    "type": "Bar",
+                    "filters_json": json.dumps({"survey": "digital-risk-assessment-archive"}),
+                    "width": "Full",
+                },
+            ],
+        },
+        # 3.4 Workshop Satisfaction Survey
+        {
+            "dashboard_name": "Survey: Workshop Satisfaction",
+            "slug": "workshop-satisfaction-survey",
+            "cards": [
+                {
+                    "name": "Workshop: Total Responses",
+                    "label": "Workshop Responses",
+                    "function": "Count",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "workshop-satisfaction-survey"]]),
+                    "color": "#21409a",
+                },
+                {
+                    "name": "Workshop: Overall Satisfaction (%)",
+                    "label": "Avg Satisfaction Score (%)",
+                    "function": "Average",
+                    "aggregate_function_based_on": "scoring_percentage",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "workshop-satisfaction-survey"]]),
+                    "color": "#10b981",
+                },
+                {
+                    "name": "Workshop: Avg Total Points (max 25)",
+                    "label": "Avg Total Points (out of 25)",
+                    "function": "Average",
+                    "aggregate_function_based_on": "scoring_total",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "workshop-satisfaction-survey"]]),
+                    "color": "#3b82f6",
+                },
+                {
+                    "name": "Workshop: Top Recommendation (5/5)",
+                    "label": "Top Recommendation (5/5 on Q6)",
+                    "function": "Count",
+                    "filters_json": json.dumps([
+                        ["Survey Response", "survey", "=", "workshop-satisfaction-survey"],
+                        ["Survey Response", "q_06", "like", "5%"],
+                    ]),
+                    "color": "#8b5cf6",
+                },
+            ],
+            "charts": [
+                {
+                    "name": "Workshop: Responses by Course ID",
+                    "chart_type": "Group By",
+                    "document_type": "Survey Response",
+                    "group_by_type": "Count",
+                    "group_by_based_on": "course_id",
+                    "type": "Bar",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "workshop-satisfaction-survey"]]),
+                    "color": "#21409a",
+                    "width": "Half",
+                },
+                {
+                    "name": "Workshop: Avg Satisfaction (%) by Course ID",
+                    "chart_type": "Group By",
+                    "document_type": "Survey Response",
+                    "group_by_type": "Average",
+                    "group_by_based_on": "course_id",
+                    "aggregate_function_based_on": "scoring_percentage",
+                    "type": "Bar",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "workshop-satisfaction-survey"]]),
+                    "color": "#10b981",
+                    "width": "Half",
+                },
+                {
+                    "name": "Workshop: Question Average Scores (1-5)",
+                    "chart_type": "Report",
+                    "report_name": "Survey Question Breakdown",
+                    "use_report_chart": 1,
+                    "type": "Bar",
+                    "filters_json": json.dumps({"survey": "workshop-satisfaction-survey"}),
+                    "width": "Full",
+                },
+                {
+                    "name": "Workshop Q1: Expectations Met (1-5)",
+                    "chart_type": "Group By",
+                    "document_type": "Survey Response",
+                    "group_by_type": "Count",
+                    "group_by_based_on": "q_01",
+                    "type": "Bar",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "workshop-satisfaction-survey"]]),
+                    "color": "#3b82f6",
+                    "width": "Half",
+                },
+                {
+                    "name": "Workshop Q2: Knowledge Useful (1-5)",
+                    "chart_type": "Group By",
+                    "document_type": "Survey Response",
+                    "group_by_type": "Count",
+                    "group_by_based_on": "q_02",
+                    "type": "Bar",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "workshop-satisfaction-survey"]]),
+                    "color": "#6099b9",
+                    "width": "Half",
+                },
+                {
+                    "name": "Workshop Q3: Materials Helpful (1-5)",
+                    "chart_type": "Group By",
+                    "document_type": "Survey Response",
+                    "group_by_type": "Count",
+                    "group_by_based_on": "q_03",
+                    "type": "Bar",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "workshop-satisfaction-survey"]]),
+                    "color": "#10b981",
+                    "width": "Half",
+                },
+                {
+                    "name": "Workshop Q4: Questions Answered (1-5)",
+                    "chart_type": "Group By",
+                    "document_type": "Survey Response",
+                    "group_by_type": "Count",
+                    "group_by_based_on": "q_04",
+                    "type": "Bar",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "workshop-satisfaction-survey"]]),
+                    "color": "#8b5cf6",
+                    "width": "Half",
+                },
+                {
+                    "name": "Workshop Q6: Would Recommend (1-5)",
+                    "chart_type": "Group By",
+                    "document_type": "Survey Response",
+                    "group_by_type": "Count",
+                    "group_by_based_on": "q_06",
+                    "type": "Bar",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "workshop-satisfaction-survey"]]),
+                    "color": "#f59e0b",
+                    "width": "Half",
+                },
+                {
+                    "name": "Workshop: Submissions Over Time",
+                    "chart_type": "Count",
+                    "document_type": "Survey Response",
+                    "based_on": "submitted_at",
+                    "timeseries": 1,
+                    "timespan": "Last Year",
+                    "time_interval": "Monthly",
+                    "type": "Line",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "workshop-satisfaction-survey"]]),
+                    "color": "#21409a",
+                    "width": "Half",
+                },
+            ],
+        },
+        # 3.5 Training Satisfaction Survey
+        {
+            "dashboard_name": "Survey: Training Satisfaction",
+            "slug": "training-satisfaction-survey",
+            "cards": [
+                {
+                    "name": "Training: Total Responses",
+                    "label": "Training Responses",
+                    "function": "Count",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "training-satisfaction-survey"]]),
+                    "color": "#21409a",
+                },
+                {
+                    "name": "Training: Overall Satisfaction (%)",
+                    "label": "Avg Satisfaction Score (%)",
+                    "function": "Average",
+                    "aggregate_function_based_on": "scoring_percentage",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "training-satisfaction-survey"]]),
+                    "color": "#10b981",
+                },
+                {
+                    "name": "Training: Avg Total Points (max 50)",
+                    "label": "Avg Total Points (out of 50)",
+                    "function": "Average",
+                    "aggregate_function_based_on": "scoring_total",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "training-satisfaction-survey"]]),
+                    "color": "#3b82f6",
+                },
+                {
+                    "name": "Training: Promoters (9-10 on Q5)",
+                    "label": "Promoters (9-10 on Q5)",
+                    "function": "Count",
+                    "filters_json": json.dumps([
+                        ["Survey Response", "survey", "=", "training-satisfaction-survey"],
+                        ["Survey Response", "q_05", "in", ["9", "10"]],
+                    ]),
+                    "color": "#8b5cf6",
+                },
+            ],
+            "charts": [
+                {
+                    "name": "Training: Responses by Course ID",
+                    "chart_type": "Group By",
+                    "document_type": "Survey Response",
+                    "group_by_type": "Count",
+                    "group_by_based_on": "course_id",
+                    "type": "Bar",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "training-satisfaction-survey"]]),
+                    "color": "#21409a",
+                    "width": "Half",
+                },
+                {
+                    "name": "Training: Avg Satisfaction (%) by Course ID",
+                    "chart_type": "Group By",
+                    "document_type": "Survey Response",
+                    "group_by_type": "Average",
+                    "group_by_based_on": "course_id",
+                    "aggregate_function_based_on": "scoring_percentage",
+                    "type": "Bar",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "training-satisfaction-survey"]]),
+                    "color": "#10b981",
+                    "width": "Half",
+                },
+                {
+                    "name": "Training: Question Average Scores (0-10)",
+                    "chart_type": "Report",
+                    "report_name": "Survey Question Breakdown",
+                    "use_report_chart": 1,
+                    "type": "Bar",
+                    "filters_json": json.dumps({"survey": "training-satisfaction-survey"}),
+                    "width": "Full",
+                },
+                {
+                    "name": "Training Q1: Overall Rating (0-10)",
+                    "chart_type": "Group By",
+                    "document_type": "Survey Response",
+                    "group_by_type": "Count",
+                    "group_by_based_on": "q_01",
+                    "type": "Bar",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "training-satisfaction-survey"]]),
+                    "color": "#3b82f6",
+                    "width": "Half",
+                },
+                {
+                    "name": "Training Q2: Practical Usefulness (0-10)",
+                    "chart_type": "Group By",
+                    "document_type": "Survey Response",
+                    "group_by_type": "Count",
+                    "group_by_based_on": "q_02",
+                    "type": "Bar",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "training-satisfaction-survey"]]),
+                    "color": "#6099b9",
+                    "width": "Half",
+                },
+                {
+                    "name": "Training Q3: Group Engagement (0-10)",
+                    "chart_type": "Group By",
+                    "document_type": "Survey Response",
+                    "group_by_type": "Count",
+                    "group_by_based_on": "q_03",
+                    "type": "Bar",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "training-satisfaction-survey"]]),
+                    "color": "#10b981",
+                    "width": "Half",
+                },
+                {
+                    "name": "Training Q4: Instructor Attitude (0-10)",
+                    "chart_type": "Group By",
+                    "document_type": "Survey Response",
+                    "group_by_type": "Count",
+                    "group_by_based_on": "q_04",
+                    "type": "Bar",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "training-satisfaction-survey"]]),
+                    "color": "#8b5cf6",
+                    "width": "Half",
+                },
+                {
+                    "name": "Training Q5: Would Recommend (0-10)",
+                    "chart_type": "Group By",
+                    "document_type": "Survey Response",
+                    "group_by_type": "Count",
+                    "group_by_based_on": "q_05",
+                    "type": "Bar",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "training-satisfaction-survey"]]),
+                    "color": "#f59e0b",
+                    "width": "Half",
+                },
+                {
+                    "name": "Training: Submissions Over Time",
+                    "chart_type": "Count",
+                    "document_type": "Survey Response",
+                    "based_on": "submitted_at",
+                    "timeseries": 1,
+                    "timespan": "Last Year",
+                    "time_interval": "Monthly",
+                    "type": "Line",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "training-satisfaction-survey"]]),
+                    "color": "#21409a",
+                    "width": "Half",
+                },
+            ],
+        },
+        # 3.6 Webinar Satisfaction Survey
+        {
+            "dashboard_name": "Survey: Webinar Satisfaction",
+            "slug": "webinar-satisfaction-survey",
+            "cards": [
+                {
+                    "name": "Webinar: Total Responses",
+                    "label": "Webinar Responses",
+                    "function": "Count",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "webinar-satisfaction-survey"]]),
+                    "color": "#21409a",
+                },
+                {
+                    "name": "Webinar: Overall Satisfaction (%)",
+                    "label": "Avg Satisfaction Score (%)",
+                    "function": "Average",
+                    "aggregate_function_based_on": "scoring_percentage",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "webinar-satisfaction-survey"]]),
+                    "color": "#10b981",
+                },
+                {
+                    "name": "Webinar: Avg Total Points (max 25)",
+                    "label": "Avg Total Points (out of 25)",
+                    "function": "Average",
+                    "aggregate_function_based_on": "scoring_total",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "webinar-satisfaction-survey"]]),
+                    "color": "#3b82f6",
+                },
+                {
+                    "name": "Webinar: Top Recommendation (5/5)",
+                    "label": "Top Recommendation (5/5 on Q6)",
+                    "function": "Count",
+                    "filters_json": json.dumps([
+                        ["Survey Response", "survey", "=", "webinar-satisfaction-survey"],
+                        ["Survey Response", "q_06", "like", "5%"],
+                    ]),
+                    "color": "#8b5cf6",
+                },
+            ],
+            "charts": [
+                {
+                    "name": "Webinar: Responses by Course ID",
+                    "chart_type": "Group By",
+                    "document_type": "Survey Response",
+                    "group_by_type": "Count",
+                    "group_by_based_on": "course_id",
+                    "type": "Bar",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "webinar-satisfaction-survey"]]),
+                    "color": "#21409a",
+                    "width": "Half",
+                },
+                {
+                    "name": "Webinar: Avg Satisfaction (%) by Course ID",
+                    "chart_type": "Group By",
+                    "document_type": "Survey Response",
+                    "group_by_type": "Average",
+                    "group_by_based_on": "course_id",
+                    "aggregate_function_based_on": "scoring_percentage",
+                    "type": "Bar",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "webinar-satisfaction-survey"]]),
+                    "color": "#10b981",
+                    "width": "Half",
+                },
+                {
+                    "name": "Webinar: Question Average Scores (1-5)",
+                    "chart_type": "Report",
+                    "report_name": "Survey Question Breakdown",
+                    "use_report_chart": 1,
+                    "type": "Bar",
+                    "filters_json": json.dumps({"survey": "webinar-satisfaction-survey"}),
+                    "width": "Full",
+                },
+                {
+                    "name": "Webinar Q1: Expectations Met (1-5)",
+                    "chart_type": "Group By",
+                    "document_type": "Survey Response",
+                    "group_by_type": "Count",
+                    "group_by_based_on": "q_01",
+                    "type": "Bar",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "webinar-satisfaction-survey"]]),
+                    "color": "#3b82f6",
+                    "width": "Half",
+                },
+                {
+                    "name": "Webinar Q2: Knowledge Useful (1-5)",
+                    "chart_type": "Group By",
+                    "document_type": "Survey Response",
+                    "group_by_type": "Count",
+                    "group_by_based_on": "q_02",
+                    "type": "Bar",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "webinar-satisfaction-survey"]]),
+                    "color": "#6099b9",
+                    "width": "Half",
+                },
+                {
+                    "name": "Webinar Q3: Materials Helpful (1-5)",
+                    "chart_type": "Group By",
+                    "document_type": "Survey Response",
+                    "group_by_type": "Count",
+                    "group_by_based_on": "q_03",
+                    "type": "Bar",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "webinar-satisfaction-survey"]]),
+                    "color": "#10b981",
+                    "width": "Half",
+                },
+                {
+                    "name": "Webinar Q4: Questions Answered (1-5)",
+                    "chart_type": "Group By",
+                    "document_type": "Survey Response",
+                    "group_by_type": "Count",
+                    "group_by_based_on": "q_04",
+                    "type": "Bar",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "webinar-satisfaction-survey"]]),
+                    "color": "#8b5cf6",
+                    "width": "Half",
+                },
+                {
+                    "name": "Webinar Q6: Would Recommend (1-5)",
+                    "chart_type": "Group By",
+                    "document_type": "Survey Response",
+                    "group_by_type": "Count",
+                    "group_by_based_on": "q_06",
+                    "type": "Bar",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "webinar-satisfaction-survey"]]),
+                    "color": "#f59e0b",
+                    "width": "Half",
+                },
+                {
+                    "name": "Webinar: Submissions Over Time",
+                    "chart_type": "Count",
+                    "document_type": "Survey Response",
+                    "based_on": "submitted_at",
+                    "timeseries": 1,
+                    "timespan": "Last Year",
+                    "time_interval": "Monthly",
+                    "type": "Line",
+                    "filters_json": json.dumps([["Survey Response", "survey", "=", "webinar-satisfaction-survey"]]),
+                    "color": "#21409a",
+                    "width": "Half",
+                },
+            ],
+        },
+    ]
 
-    # 4. Native Dashboard: Survey Analytics
-    dash_name = "Survey Analytics"
-    dash = frappe.get_doc("Dashboard", dash_name) if frappe.db.exists("Dashboard", dash_name) else frappe.new_doc("Dashboard")
-    dash.dashboard_name = dash_name
-    dash.module = "Website"
-    dash.is_standard = 0
-    dash.is_default = 0
-    dash.cards = []
-    for spec in cards_spec:
-        dash.append("cards", {"card": spec["name"]})
-    dash.charts = []
-    for spec in charts_spec:
-        dash.append("charts", {"chart": spec["name"], "width": spec["width"]})
-    dash.save(ignore_permissions=True)
+    for ps in per_survey_dashboards:
+        for c in ps["cards"]:
+            upsert_number_card(c)
+        for ch in ps["charts"]:
+            upsert_dashboard_chart(ch)
+        upsert_dashboard(ps["dashboard_name"], [c["name"] for c in ps["cards"]], ps["charts"])
 
-    # 5. Native Workspace: Surveys (/app/surveys)
+    # 4. Native Workspace: Surveys (/app/surveys) with links to all 6 per-survey Dashboards + Overview + Reports
     ws_name = "Surveys"
     ws = frappe.get_doc("Workspace", ws_name) if frappe.db.exists("Workspace", ws_name) else frappe.new_doc("Workspace")
     ws.name = ws_name
@@ -1199,34 +2172,50 @@ ORDER BY sr.survey ASC, sra.question_code ASC, COUNT(sra.name) DESC"""
     ws.is_hidden = 0
     ws.icon = "check-square"
     ws.shortcuts = []
-    for sc in [
-        {"label": "Survey Analytics Dashboard", "type": "Dashboard", "link_to": "Survey Analytics", "color": "Blue"},
-        {"label": "Survey Responses", "type": "DocType", "link_to": "Survey Response", "doc_view": "List", "color": "Green"},
+    shortcuts_spec = [
+        {"label": "Overview: All Surveys Dashboard", "type": "Dashboard", "link_to": "Survey Analytics", "color": "Blue"},
+        {"label": "Digital Hygiene Assessment", "type": "Dashboard", "link_to": "Survey: Digital Hygiene Assessment", "color": "Blue"},
+        {"label": "Digital Hygiene (Endress+Hauser)", "type": "Dashboard", "link_to": "Survey: Digital Hygiene (Endress+Hauser)", "color": "Blue"},
+        {"label": "Digital Risk Assessment (Archive)", "type": "Dashboard", "link_to": "Survey: Digital Risk Assessment (Archive)", "color": "Orange"},
+        {"label": "Workshop Satisfaction Dashboard", "type": "Dashboard", "link_to": "Survey: Workshop Satisfaction", "color": "Green"},
+        {"label": "Training Satisfaction Dashboard", "type": "Dashboard", "link_to": "Survey: Training Satisfaction", "color": "Green"},
+        {"label": "Webinar Satisfaction Dashboard", "type": "Dashboard", "link_to": "Survey: Webinar Satisfaction", "color": "Green"},
+        {"label": "Survey Responses", "type": "DocType", "link_to": "Survey Response", "doc_view": "List", "color": "Grey"},
         {"label": "Surveys", "type": "DocType", "link_to": "Survey", "doc_view": "List", "color": "Grey"},
-        {"label": "Question Breakdown Report", "type": "Report", "link_to": "Survey Question Breakdown", "is_query_report": 1, "color": "Orange"},
+        {"label": "Question Breakdown Report", "type": "Report", "link_to": "Survey Question Breakdown", "is_query_report": 1, "color": "Purple"},
         {"label": "Answer Distribution Report", "type": "Report", "link_to": "Survey Answer Distribution", "is_query_report": 1, "color": "Purple"},
-    ]:
+        {"label": "Open Text Answers Report", "type": "Report", "link_to": "Survey Open Text Answers", "is_query_report": 1, "color": "Purple"},
+    ]
+    for sc in shortcuts_spec:
         ws.append("shortcuts", sc)
     ws.number_cards = []
-    for spec in cards_spec:
+    for spec in overview_cards:
         ws.append("number_cards", {"number_card_name": spec["name"], "label": spec["name"]})
     ws.charts = []
-    for spec in charts_spec:
+    for spec in overview_charts:
         ws.append("charts", {"chart_name": spec["name"], "label": spec["name"]})
     ws.content = json.dumps([
-        {"id": "hdr_shortcuts", "type": "header", "data": {"text": "<span class=\"h4\"><b>Surveys & Results</b></span>", "col": 12}},
-        {"id": "sc_1", "type": "shortcut", "data": {"shortcut_name": "Survey Analytics Dashboard", "col": 4}},
-        {"id": "sc_2", "type": "shortcut", "data": {"shortcut_name": "Survey Responses", "col": 4}},
-        {"id": "sc_3", "type": "shortcut", "data": {"shortcut_name": "Surveys", "col": 4}},
-        {"id": "sc_4", "type": "shortcut", "data": {"shortcut_name": "Question Breakdown Report", "col": 4}},
-        {"id": "sc_5", "type": "shortcut", "data": {"shortcut_name": "Answer Distribution Report", "col": 4}},
-        {"id": "hdr_kpis", "type": "header", "data": {"text": "<span class=\"h4\"><b>Key Metrics</b></span>", "col": 12}},
+        {"id": "hdr_per_survey", "type": "header", "data": {"text": "<span class=\"h4\"><b>Per-Survey Deep-Dive Dashboards</b></span>", "col": 12}},
+        {"id": "sc_dh_1", "type": "shortcut", "data": {"shortcut_name": "Digital Hygiene Assessment", "col": 4}},
+        {"id": "sc_dh_2", "type": "shortcut", "data": {"shortcut_name": "Digital Hygiene (Endress+Hauser)", "col": 4}},
+        {"id": "sc_dh_3", "type": "shortcut", "data": {"shortcut_name": "Digital Risk Assessment (Archive)", "col": 4}},
+        {"id": "sc_sat_1", "type": "shortcut", "data": {"shortcut_name": "Workshop Satisfaction Dashboard", "col": 4}},
+        {"id": "sc_sat_2", "type": "shortcut", "data": {"shortcut_name": "Training Satisfaction Dashboard", "col": 4}},
+        {"id": "sc_sat_3", "type": "shortcut", "data": {"shortcut_name": "Webinar Satisfaction Dashboard", "col": 4}},
+        {"id": "hdr_shortcuts", "type": "header", "data": {"text": "<span class=\"h4\"><b>Records & Filterable Reports (by Survey & Course ID)</b></span>", "col": 12}},
+        {"id": "sc_ov", "type": "shortcut", "data": {"shortcut_name": "Overview: All Surveys Dashboard", "col": 4}},
+        {"id": "sc_resp", "type": "shortcut", "data": {"shortcut_name": "Survey Responses", "col": 4}},
+        {"id": "sc_surv", "type": "shortcut", "data": {"shortcut_name": "Surveys", "col": 4}},
+        {"id": "sc_rep1", "type": "shortcut", "data": {"shortcut_name": "Question Breakdown Report", "col": 4}},
+        {"id": "sc_rep2", "type": "shortcut", "data": {"shortcut_name": "Answer Distribution Report", "col": 4}},
+        {"id": "sc_rep3", "type": "shortcut", "data": {"shortcut_name": "Open Text Answers Report", "col": 4}},
+        {"id": "hdr_kpis", "type": "header", "data": {"text": "<span class=\"h4\"><b>Cross-Survey Key Metrics</b></span>", "col": 12}},
         {"id": "nc_1", "type": "number_card", "data": {"number_card_name": "Total Survey Responses", "col": 4}},
         {"id": "nc_2", "type": "number_card", "data": {"number_card_name": "Digital Hygiene Assessments", "col": 4}},
         {"id": "nc_3", "type": "number_card", "data": {"number_card_name": "Average Hygiene Score (%)", "col": 4}},
         {"id": "nc_4", "type": "number_card", "data": {"number_card_name": "Respondents At Risk", "col": 4}},
         {"id": "nc_5", "type": "number_card", "data": {"number_card_name": "Satisfaction Survey Responses", "col": 4}},
-        {"id": "hdr_charts", "type": "header", "data": {"text": "<span class=\"h4\"><b>Aggregated Survey Charts</b></span>", "col": 12}},
+        {"id": "hdr_charts", "type": "header", "data": {"text": "<span class=\"h4\"><b>Cross-Survey Overview Charts</b></span>", "col": 12}},
         {"id": "ch_1", "type": "chart", "data": {"chart_name": "Survey Responses by Survey", "col": 6}},
         {"id": "ch_2", "type": "chart", "data": {"chart_name": "Digital Hygiene Grade Distribution", "col": 6}},
         {"id": "ch_3", "type": "chart", "data": {"chart_name": "Average Score (%) by Survey", "col": 6}},

@@ -18,23 +18,36 @@ This skill bridges:
      - **`Survey Question Item`**: Bilingual questions and section headers (`question_code` `q_01`..`q_20`, `section_pl`, `section_en`, `question_pl`, `question_en`, `question_type`, `options_pl`, `options_en`, `score_map_json`).
      - **`Survey Grade Item`**: Bilingual grading brackets for scored assessments (`grade_name_pl`, `grade_name_en`, `min_score_percentage`, `max_score_percentage`, `description_pl`, `description_en`).
    - **`Survey Response`**: Stores both migrated historical Odoo submissions and new public `Web Form` submissions in a unified structure:
+     - **`course_id`** (`Course / Event ID`, `Data`, `default = "general"`, `in_list_view = 1`, `in_standard_filter = 1`, `search_index = 1`): Separates responses by course, workshop, training cohort, or client without duplicating the survey.
      - Flat fields `q_01`..`q_20` (`Data` / `Small Text`) so native Frappe **`Web Form`** can bind directly to each question in both Polish and English.
      - Child table **`Survey Response Answer`** (`answers`) storing structured per-question records (`question_code`, `question_text`, `answer_value`, `answer_score`, `odoo_question_id`).
-     - Scoring & grading summary fields (`scoring_total`, `scoring_percentage`, `achieved_grade`, `achieved_grade_description`, `state`, `language`, `submitted_at`, `respondent_email`, `respondent_name`, `odoo_input_id`, `odoo_access_token`).
-3. **Bilingual Native `Web Form`s (`/surveys/<slug>` & `/en/surveys/<slug>`)**:
+     - Scoring & grading summary fields (`scoring_total`, `scoring_percentage`, `achieved_grade`, `achieved_grade_description`, `state`, `language`, `submitted_at`, `respondent_email`, `respondent_name`, `odoo_input_id`, `odoo_access_token`) computed for both graded assessments and scale-based satisfaction surveys (`0–100%` satisfaction score).
+3. **Bilingual Native `Web Form`s (`/surveys/<slug>` & `/en/surveys/<slug>`) with URL Course Identifier Support (`?course=<id>`)**:
    - Creates two native Frappe `Web Form` records (`doc_type = "Survey Response"`, `anonymous = 1`, `login_required = 0`, `allow_multiple = 1`) per survey:
-     - Primary language (Polish): `/surveys/<slug>`
-     - Secondary language (English): `/en/surveys/<slug>`
+     - Primary language (Polish): `/surveys/<slug>` (and `/surveys/<slug>/new`)
+     - Secondary language (English): `/en/surveys/<slug>` (and `/en/surveys/<slug>/new`)
+   - **URL Parameter Course/Cohort Separation (`course_id`)**:
+     - Passing `?course=<identifier>` (or `?course_id=...`, `?id=...`, `?event=...`, `?cohort=...`, `?group=...`, or clean path `/surveys/<slug>/course/<identifier>`) automatically populates `course_id` on `Survey Response`, displays a subtle header badge (`Szkolenie / Kurs: <id>` / `Course / Event: <id>`), and preserves the query parameter when switching languages in the navbar (`🌐 PL ▾` / `🌐 EN ▾`).
+     - Includes `Website Route Redirect` rules with `forward_query_parameters = 1` (`surveys/([^/]+)` $\rightarrow$ `/surveys/\1/new` and `en/surveys/([^/]+)` $\rightarrow$ `/en/surveys/\1/new`) so query parameters are preserved even if `/new` is omitted from the shared link.
    - Because `WebForm.validate_fields()` in Frappe only verifies `meta.has_field(df.fieldname)`, both the Polish and English `Web Form`s map to the same `q_01`..`q_20` fields on `Survey Response` while providing language-specific `label`, `fieldtype` (`Select` or `Small Text`), `options`, `Section Break` headers, and UI strings.
-   - Because the routes follow `/<path>` and `/en/<path>`, the `Multilingual Navbar` (`🌐 PL ▾` / `🌐 EN ▾`) and `Headline Footer` language dropdown switchers automatically toggle between the Polish and English versions of every survey `Web Form`.
-   - Includes interactive `client_script` + `custom_css` on each `Web Form` that renders radio-pill/Likert cards for `Select` questions and calculates the participant's score (`%`) and achieved grade (`Balanced` / `Zrównoważony`, `Controlled` / `Pod kontrolą`, `At Risk` / `W grupie ryzyka`, `Unhealthy` / `Niezdrowy`) immediately upon submission, plus a `Before Save` `Server Script` on `Survey Response` that populates the `answers` child table and verifies scores server-side.
+   - Includes interactive `client_script` + `custom_css` on each `Web Form` that renders radio-pill/Likert cards for `Select` questions and calculates the participant's score (`%`) and achieved grade immediately upon submission, plus a `Before Save` `Server Script` on `Survey Response` that populates the `answers` child table and computes `scoring_total`, `scoring_percentage`, and bilingual `achieved_grade` (`Zrównoważony / Balanced`, `Pod kontrolą / Controlled`, `W grupie ryzyka / At Risk`, `Niezdrowy / Unhealthy`) server-side.
 4. **Bilingual Survey Directory (`Web Page`) & Legacy Odoo Redirects**:
-   - Creates `/surveys` (Polish) and `/en/surveys` (English) Page Builder `Web Page`s listing the public surveys and assessments, plus `/ankiety` $\rightarrow$ `/surveys`, `/en/ankiety` $\rightarrow$ `/en/surveys`, and `/survey/start/<odoo_access_token>` $\rightarrow$ `/surveys/<slug>` redirects in `Website Settings`.
-5. **Native Frappe Analytics (`Dashboard`, `Number Card`s, `Dashboard Chart`s, `Query Report`s, and `Workspace`)**:
-   - **`Surveys` Workspace (`/app/surveys`)** and **`Survey Analytics` Dashboard (`/app/dashboard-view/Survey%20Analytics`)**:
-     - **5 `Number Card`s**: `Total Survey Responses`, `Digital Hygiene Assessments`, `Average Hygiene Score (%)`, `Respondents At Risk`, and `Satisfaction Survey Responses`.
-     - **5 `Dashboard Chart`s**: `Survey Responses by Survey`, `Digital Hygiene Grade Distribution`, `Average Score (%) by Survey`, `Survey Submissions Over Time`, and `Survey Question Average Scores`.
-     - **2 `Query Report`s**: `Survey Question Breakdown` (`/app/query-report/Survey%20Question%20Breakdown`) and `Survey Answer Distribution` (`/app/query-report/Survey%20Answer%20Distribution`).
+   - Creates `/surveys` (Polish) and `/en/surveys` (English) Page Builder `Web Page`s listing the public surveys and assessments, plus `/ankiety` $\rightarrow$ `/surveys`, `/en/ankiety` $\rightarrow$ `/en/surveys`, and `/survey/start/<odoo_access_token>` $\rightarrow$ `/surveys/<slug>/new` redirects in `Website Settings`.
+5. **6 Per-Survey Deep-Dive Dashboards + 1 Cross-Survey Overview Dashboard + 3 Filterable `Script Report`s**:
+   - **6 Dedicated Per-Survey `Dashboard`s** (accessible from the **`Surveys` Workspace (`/app/surveys`)**):
+     1. `Survey: Digital Hygiene Assessment` (`/app/dashboard-view/Survey%3A%20Digital%20Hygiene%20Assessment`)
+     2. `Survey: Digital Hygiene (Endress+Hauser)` (`/app/dashboard-view/Survey%3A%20Digital%20Hygiene%20(Endress%2BHauser)`)
+     3. `Survey: Digital Risk Assessment (Archive)` (`/app/dashboard-view/Survey%3A%20Digital%20Risk%20Assessment%20(Archive)`)
+     4. `Survey: Workshop Satisfaction` (`/app/dashboard-view/Survey%3A%20Workshop%20Satisfaction`)
+     5. `Survey: Training Satisfaction` (`/app/dashboard-view/Survey%3A%20Training%20Satisfaction`)
+     6. `Survey: Webinar Satisfaction` (`/app/dashboard-view/Survey%3A%20Webinar%20Satisfaction`)
+   - **1 Cross-Survey Overview `Dashboard`**: `Survey Analytics` (`/app/dashboard-view/Survey%20Analytics`)
+   - **Per-Course & Per-Question Deep Dive**:
+     - Every satisfaction dashboard includes `Responses by Course ID`, `Avg Satisfaction (%) by Course ID`, `Question Average Scores` (`use_report_chart = 1`), and individual answer distribution charts for each scale question (`Q1`..`Q6`).
+     - **3 Filterable `Script Report`s** (all filterable by `survey` and `course_id`):
+       - `Survey Question Breakdown` (`/app/query-report/Survey%20Question%20Breakdown`)
+       - `Survey Answer Distribution` (`/app/query-report/Survey%20Answer%20Distribution`)
+       - `Survey Open Text Answers` (`/app/query-report/Survey%20Open%20Text%20Answers`)
    - Strictly restricted to logged-in admin roles (`System Manager` and `Website Manager`); `Guest` has zero read/list access to `Survey Response`.
 
 ---
