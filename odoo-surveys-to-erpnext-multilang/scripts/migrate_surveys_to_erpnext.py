@@ -471,10 +471,14 @@ def ensure_custom_doctypes():
             "permissions": [
                 {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "export": 1, "report": 1},
                 {"role": "Website Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "export": 1, "report": 1},
-                {"role": "Guest", "read": 1, "write": 1, "create": 1},
             ],
         })
         doc.insert(ignore_permissions=True)
+    else:
+        doc = frappe.get_doc("DocType", "Survey Response")
+        if any(p.role == "Guest" for p in doc.permissions):
+            doc.permissions = [p for p in doc.permissions if p.role != "Guest"]
+            doc.save(ignore_permissions=True)
 
     frappe.db.commit()
 
@@ -972,6 +976,267 @@ def ensure_survey_catalog_pages_and_redirects(data: dict):
     frappe.db.commit()
 
 
+def ensure_survey_analytics_dashboard_and_workspace():
+    # 1. Native Query Reports for Question & Answer aggregation
+    r1_name = "Survey Question Breakdown"
+    r1 = frappe.get_doc("Report", r1_name) if frappe.db.exists("Report", r1_name) else frappe.new_doc("Report")
+    r1.report_name = r1_name
+    r1.ref_doctype = "Survey Response"
+    r1.is_standard = "No"
+    r1.module = "Website"
+    r1.report_type = "Query Report"
+    r1.disabled = 0
+    r1.query = """SELECT
+    sr.survey AS "Survey:Link/Survey:200",
+    sra.question_code AS "Code:Data:70",
+    CONCAT(sra.question_code, " - ", LEFT(sra.question_text, 45)) AS "Question Label:Data:260",
+    sra.question_text AS "Full Question:Data:380",
+    COUNT(sra.name) AS "Responses:Int:100",
+    ROUND(AVG(sra.answer_score), 2) AS "Avg Score (pts):Float:130",
+    ROUND(SUM(sra.answer_score), 1) AS "Total Points:Float:120"
+FROM `tabSurvey Response Answer` sra
+INNER JOIN `tabSurvey Response` sr ON sr.name = sra.parent
+GROUP BY sr.survey, sra.question_code, sra.question_text
+ORDER BY sr.survey ASC, sra.question_code ASC"""
+    r1.roles = []
+    for role in ["System Manager", "Website Manager"]:
+        r1.append("roles", {"role": role})
+    r1.save(ignore_permissions=True)
+
+    r2_name = "Survey Answer Distribution"
+    r2 = frappe.get_doc("Report", r2_name) if frappe.db.exists("Report", r2_name) else frappe.new_doc("Report")
+    r2.report_name = r2_name
+    r2.ref_doctype = "Survey Response"
+    r2.is_standard = "No"
+    r2.module = "Website"
+    r2.report_type = "Query Report"
+    r2.disabled = 0
+    r2.query = """SELECT
+    sr.survey AS "Survey:Link/Survey:200",
+    sra.question_code AS "Code:Data:70",
+    sra.question_text AS "Question:Data:340",
+    sra.answer_value AS "Answer / Option:Data:240",
+    COUNT(sra.name) AS "Count:Int:90",
+    ROUND(AVG(sra.answer_score), 2) AS "Points:Float:90"
+FROM `tabSurvey Response Answer` sra
+INNER JOIN `tabSurvey Response` sr ON sr.name = sra.parent
+GROUP BY sr.survey, sra.question_code, sra.question_text, sra.answer_value
+ORDER BY sr.survey ASC, sra.question_code ASC, COUNT(sra.name) DESC"""
+    r2.roles = []
+    for role in ["System Manager", "Website Manager"]:
+        r2.append("roles", {"role": role})
+    r2.save(ignore_permissions=True)
+
+    # 2. Native Number Cards
+    cards_spec = [
+        {
+            "name": "Total Survey Responses",
+            "label": "Total Survey Responses",
+            "function": "Count",
+            "filters_json": "[]",
+            "color": "#21409a",
+        },
+        {
+            "name": "Digital Hygiene Assessments",
+            "label": "Digital Hygiene Assessments",
+            "function": "Count",
+            "filters_json": json.dumps([["Survey Response", "survey", "=", "digital-hygiene-assessment"]]),
+            "color": "#3b82f6",
+        },
+        {
+            "name": "Average Hygiene Score (%)",
+            "label": "Average Hygiene Score (%)",
+            "function": "Average",
+            "aggregate_function_based_on": "scoring_percentage",
+            "filters_json": json.dumps([["Survey Response", "scoring_percentage", ">", 0]]),
+            "color": "#10b981",
+        },
+        {
+            "name": "Respondents At Risk",
+            "label": "Respondents At Risk",
+            "function": "Count",
+            "filters_json": json.dumps([["Survey Response", "achieved_grade", "in", ["W grupie ryzyka", "At Risk", "Niezdrowy", "Unhealthy", "Zagrożenie uzależnieniem", "Addiction Risk"]]]),
+            "color": "#ef4444",
+        },
+        {
+            "name": "Satisfaction Survey Responses",
+            "label": "Satisfaction Survey Responses",
+            "function": "Count",
+            "filters_json": json.dumps([["Survey Response", "survey", "in", ["workshop-satisfaction-survey", "webinar-satisfaction-survey", "training-satisfaction-survey"]]]),
+            "color": "#8b5cf6",
+        },
+    ]
+
+    for spec in cards_spec:
+        nc = frappe.get_doc("Number Card", spec["name"]) if frappe.db.exists("Number Card", spec["name"]) else frappe.new_doc("Number Card")
+        nc.name = spec["name"]
+        nc.label = spec["label"]
+        nc.type = "Document Type"
+        nc.document_type = "Survey Response"
+        nc.function = spec["function"]
+        nc.aggregate_function_based_on = spec.get("aggregate_function_based_on")
+        nc.filters_json = spec["filters_json"]
+        nc.is_public = 1
+        nc.is_standard = 0
+        nc.module = "Website"
+        nc.color = spec["color"]
+        nc.show_percentage_stats = 1
+        nc.stats_time_interval = "Monthly"
+        nc.save(ignore_permissions=True)
+
+    # 3. Native Dashboard Charts
+    charts_spec = [
+        {
+            "name": "Survey Responses by Survey",
+            "chart_type": "Group By",
+            "document_type": "Survey Response",
+            "group_by_type": "Count",
+            "group_by_based_on": "survey",
+            "type": "Bar",
+            "filters_json": "[]",
+            "color": "#21409a",
+            "width": "Half",
+        },
+        {
+            "name": "Digital Hygiene Grade Distribution",
+            "chart_type": "Group By",
+            "document_type": "Survey Response",
+            "group_by_type": "Count",
+            "group_by_based_on": "achieved_grade",
+            "type": "Donut",
+            "filters_json": json.dumps([["Survey Response", "achieved_grade", "is", "set"]]),
+            "color": "#10b981",
+            "width": "Half",
+        },
+        {
+            "name": "Average Score (%) by Survey",
+            "chart_type": "Group By",
+            "document_type": "Survey Response",
+            "group_by_type": "Average",
+            "group_by_based_on": "survey",
+            "aggregate_function_based_on": "scoring_percentage",
+            "type": "Bar",
+            "filters_json": json.dumps([["Survey Response", "scoring_percentage", ">", 0]]),
+            "color": "#3b82f6",
+            "width": "Half",
+        },
+        {
+            "name": "Survey Submissions Over Time",
+            "chart_type": "Count",
+            "document_type": "Survey Response",
+            "based_on": "submitted_at",
+            "timeseries": 1,
+            "timespan": "Last Year",
+            "time_interval": "Monthly",
+            "type": "Line",
+            "filters_json": "[]",
+            "color": "#8b5cf6",
+            "width": "Half",
+        },
+        {
+            "name": "Survey Question Average Scores",
+            "chart_type": "Report",
+            "report_name": "Survey Question Breakdown",
+            "use_report_chart": 0,
+            "x_field": "question_label",
+            "y_axis": [{"y_field": "avg_score_(pts)", "color": "#21409a"}],
+            "type": "Bar",
+            "filters_json": "{}",
+            "width": "Full",
+        },
+    ]
+
+    for spec in charts_spec:
+        dc = frappe.get_doc("Dashboard Chart", spec["name"]) if frappe.db.exists("Dashboard Chart", spec["name"]) else frappe.new_doc("Dashboard Chart")
+        dc.chart_name = spec["name"]
+        dc.chart_type = spec["chart_type"]
+        dc.document_type = spec.get("document_type")
+        dc.group_by_type = spec.get("group_by_type")
+        dc.group_by_based_on = spec.get("group_by_based_on")
+        dc.aggregate_function_based_on = spec.get("aggregate_function_based_on")
+        dc.based_on = spec.get("based_on")
+        dc.timeseries = spec.get("timeseries", 0)
+        dc.timespan = spec.get("timespan")
+        dc.time_interval = spec.get("time_interval")
+        dc.report_name = spec.get("report_name")
+        dc.use_report_chart = spec.get("use_report_chart", 0)
+        dc.x_field = spec.get("x_field")
+        dc.type = spec["type"]
+        dc.filters_json = spec["filters_json"]
+        dc.color = spec.get("color")
+        dc.is_public = 1
+        dc.is_standard = 0
+        dc.module = "Website"
+        dc.show_values_over_chart = 1
+        dc.y_axis = []
+        for y in spec.get("y_axis", []):
+            dc.append("y_axis", y)
+        dc.save(ignore_permissions=True)
+
+    # 4. Native Dashboard: Survey Analytics
+    dash_name = "Survey Analytics"
+    dash = frappe.get_doc("Dashboard", dash_name) if frappe.db.exists("Dashboard", dash_name) else frappe.new_doc("Dashboard")
+    dash.dashboard_name = dash_name
+    dash.module = "Website"
+    dash.is_standard = 0
+    dash.is_default = 0
+    dash.cards = []
+    for spec in cards_spec:
+        dash.append("cards", {"card": spec["name"]})
+    dash.charts = []
+    for spec in charts_spec:
+        dash.append("charts", {"chart": spec["name"], "width": spec["width"]})
+    dash.save(ignore_permissions=True)
+
+    # 5. Native Workspace: Surveys (/app/surveys)
+    ws_name = "Surveys"
+    ws = frappe.get_doc("Workspace", ws_name) if frappe.db.exists("Workspace", ws_name) else frappe.new_doc("Workspace")
+    ws.name = ws_name
+    ws.title = "Surveys"
+    ws.label = "Surveys"
+    ws.module = "Website"
+    ws.public = 1
+    ws.is_hidden = 0
+    ws.icon = "check-square"
+    ws.shortcuts = []
+    for sc in [
+        {"label": "Survey Analytics Dashboard", "type": "Dashboard", "link_to": "Survey Analytics", "color": "Blue"},
+        {"label": "Survey Responses", "type": "DocType", "link_to": "Survey Response", "doc_view": "List", "color": "Green"},
+        {"label": "Surveys", "type": "DocType", "link_to": "Survey", "doc_view": "List", "color": "Grey"},
+        {"label": "Question Breakdown Report", "type": "Report", "link_to": "Survey Question Breakdown", "is_query_report": 1, "color": "Orange"},
+        {"label": "Answer Distribution Report", "type": "Report", "link_to": "Survey Answer Distribution", "is_query_report": 1, "color": "Purple"},
+    ]:
+        ws.append("shortcuts", sc)
+    ws.number_cards = []
+    for spec in cards_spec:
+        ws.append("number_cards", {"number_card_name": spec["name"], "label": spec["name"]})
+    ws.charts = []
+    for spec in charts_spec:
+        ws.append("charts", {"chart_name": spec["name"], "label": spec["name"]})
+    ws.content = json.dumps([
+        {"id": "hdr_shortcuts", "type": "header", "data": {"text": "<span class=\"h4\"><b>Surveys & Results</b></span>", "col": 12}},
+        {"id": "sc_1", "type": "shortcut", "data": {"shortcut_name": "Survey Analytics Dashboard", "col": 4}},
+        {"id": "sc_2", "type": "shortcut", "data": {"shortcut_name": "Survey Responses", "col": 4}},
+        {"id": "sc_3", "type": "shortcut", "data": {"shortcut_name": "Surveys", "col": 4}},
+        {"id": "sc_4", "type": "shortcut", "data": {"shortcut_name": "Question Breakdown Report", "col": 4}},
+        {"id": "sc_5", "type": "shortcut", "data": {"shortcut_name": "Answer Distribution Report", "col": 4}},
+        {"id": "hdr_kpis", "type": "header", "data": {"text": "<span class=\"h4\"><b>Key Metrics</b></span>", "col": 12}},
+        {"id": "nc_1", "type": "number_card", "data": {"number_card_name": "Total Survey Responses", "col": 4}},
+        {"id": "nc_2", "type": "number_card", "data": {"number_card_name": "Digital Hygiene Assessments", "col": 4}},
+        {"id": "nc_3", "type": "number_card", "data": {"number_card_name": "Average Hygiene Score (%)", "col": 4}},
+        {"id": "nc_4", "type": "number_card", "data": {"number_card_name": "Respondents At Risk", "col": 4}},
+        {"id": "nc_5", "type": "number_card", "data": {"number_card_name": "Satisfaction Survey Responses", "col": 4}},
+        {"id": "hdr_charts", "type": "header", "data": {"text": "<span class=\"h4\"><b>Aggregated Survey Charts</b></span>", "col": 12}},
+        {"id": "ch_1", "type": "chart", "data": {"chart_name": "Survey Responses by Survey", "col": 6}},
+        {"id": "ch_2", "type": "chart", "data": {"chart_name": "Digital Hygiene Grade Distribution", "col": 6}},
+        {"id": "ch_3", "type": "chart", "data": {"chart_name": "Average Score (%) by Survey", "col": 6}},
+        {"id": "ch_4", "type": "chart", "data": {"chart_name": "Survey Submissions Over Time", "col": 6}},
+        {"id": "ch_5", "type": "chart", "data": {"chart_name": "Survey Question Average Scores", "col": 12}},
+    ])
+    ws.save(ignore_permissions=True)
+    frappe.db.commit()
+
+
 def main():
     parser = argparse.ArgumentParser(description="Migrate Odoo surveys and responses to ERPNext.")
     parser.add_argument("--site", default="frontend")
@@ -995,6 +1260,9 @@ def main():
 
     print("4. Creating bilingual /surveys and /en/surveys Catalog Web Pages & legacy redirects...")
     ensure_survey_catalog_pages_and_redirects(data)
+
+    print("5. Creating native Frappe Survey Analytics Dashboard, Reports, and Surveys Workspace...")
+    ensure_survey_analytics_dashboard_and_workspace()
 
     frappe.clear_cache()
     print(f"Done! Survey count: {frappe.db.count('Survey')} | Survey Response count: {frappe.db.count('Survey Response')} | Survey Web Forms: {frappe.db.count('Web Form', {'doc_type': 'Survey Response'})}")

@@ -30,6 +30,12 @@ This skill bridges:
    - Includes interactive `client_script` + `custom_css` on each `Web Form` that renders radio-pill/Likert cards for `Select` questions and calculates the participant's score (`%`) and achieved grade (`Balanced` / `Zrównoważony`, `Controlled` / `Pod kontrolą`, `At Risk` / `W grupie ryzyka`, `Unhealthy` / `Niezdrowy`) immediately upon submission, plus a `Before Save` `Server Script` on `Survey Response` that populates the `answers` child table and verifies scores server-side.
 4. **Bilingual Survey Directory (`Web Page`) & Legacy Odoo Redirects**:
    - Creates `/surveys` (Polish) and `/en/surveys` (English) Page Builder `Web Page`s listing the public surveys and assessments, plus `/ankiety` $\rightarrow$ `/surveys`, `/en/ankiety` $\rightarrow$ `/en/surveys`, and `/survey/start/<odoo_access_token>` $\rightarrow$ `/surveys/<slug>` redirects in `Website Settings`.
+5. **Native Frappe Analytics (`Dashboard`, `Number Card`s, `Dashboard Chart`s, `Query Report`s, and `Workspace`)**:
+   - **`Surveys` Workspace (`/app/surveys`)** and **`Survey Analytics` Dashboard (`/app/dashboard-view/Survey%20Analytics`)**:
+     - **5 `Number Card`s**: `Total Survey Responses`, `Digital Hygiene Assessments`, `Average Hygiene Score (%)`, `Respondents At Risk`, and `Satisfaction Survey Responses`.
+     - **5 `Dashboard Chart`s**: `Survey Responses by Survey`, `Digital Hygiene Grade Distribution`, `Average Score (%) by Survey`, `Survey Submissions Over Time`, and `Survey Question Average Scores`.
+     - **2 `Query Report`s**: `Survey Question Breakdown` (`/app/query-report/Survey%20Question%20Breakdown`) and `Survey Answer Distribution` (`/app/query-report/Survey%20Answer%20Distribution`).
+   - Strictly restricted to logged-in admin roles (`System Manager` and `Website Manager`); `Guest` has zero read/list access to `Survey Response`.
 
 ---
 
